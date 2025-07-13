@@ -17,8 +17,10 @@ def analyse_vehicle_count(file_path: str) -> None:
         # Calculate total cars/vans by summing the three columns
         gdf['Total cars or vans'] = (
                 gdf['1 car or van in household'] +
-                gdf['2 cars or vans in household'] +
-                gdf['3 or more cars or vans in household']
+                # multiply by 2 to account for the two-car households
+                gdf['2 cars or vans in household'] * 2 +
+                # multiply by 3 to account for the three or more car households
+                gdf['3 or more cars or vans in household'] * 3
         )
 
         # Sort by total vehicles in descending order
