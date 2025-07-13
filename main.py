@@ -3,11 +3,13 @@ import os
 from constant.find_ev_chargers import print_ev_charger_locations
 from constant.pavement_suitability_ev import filter_suitable_pavements
 from constant.suitable_road_width import print_suitable_road_widths
-from constant.vehicle_count import analyse_vehicle_count
+from constant.vehicle_count import analyse_vehicle_count, get_vehicle_count_summary
 from geospatial_processing import analyze_ev_charger_suitability, save_results
+from optimisation_algorithm import optimize_ev_charger_locations, save_optimization_results, visualize_optimization_results
 
 if __name__ == "__main__":
     data_dir = "Data"
+    output_dir = "output"
 
     # File paths
     ev_charger_file = os.path.join(data_dir, "wcr_ev_charge.gpkg")
@@ -28,36 +30,67 @@ if __name__ == "__main__":
 
     # Save results if analysis was successful
     if results is not None:
-        save_results(results, output_dir="output")
-        
-        # Print some sample results
-        print("\n" + "="*60)
-        print("SAMPLE RESULTS")
-        print("="*60)
-        
-        if len(results['final_suitable_pavements']) > 0:
-            print("\nFirst 5 suitable pavement locations:")
-            print(results['final_suitable_pavements'].head())
-        else:
-            print("\nNo suitable pavement locations found.")
-        
+        save_results(results, output_dir=output_dir)
         print(f"\nTotal suitable locations found: {len(results['final_suitable_pavements'])}")
-    
+        
+        # Run optimization algorithm if we have suitable locations
+        if len(results['final_suitable_pavements']) > 0:
+            print("\n" + "="*60)
+            print("RUNNING OPTIMIZATION ALGORITHM")
+            print("="*60)
+            
+            # Paths to the generated files
+            suitable_locations_file = os.path.join(output_dir, "suitable_ev_locations.gpkg")
+            
+            # Run optimization
+            optimization_results = optimize_ev_charger_locations(
+                existing_chargers_file=ev_charger_file,
+                suitable_locations_file=suitable_locations_file,
+                vehicle_data_file=vehicle_file,
+                n_clusters=None,  # Auto-determine optimal clusters
+                n_locations_per_cluster=2  # Select 2 locations per cluster
+            )
+            
+            if optimization_results is not None:
+                # Save optimization results
+                save_optimization_results(optimization_results, output_dir=output_dir)
+                
+                # Create visualization
+                visualize_optimization_results(optimization_results, output_dir=output_dir)
+                
+                # Display selected locations
+                print("\n" + "="*60)
+                print("SELECTED OPTIMAL LOCATIONS")
+                print("="*60)
+                
+                selected_locations = optimization_results['selected_locations']
+                
+                for idx, location in selected_locations.iterrows():
+                    print(f"\nOptimal Location {idx + 1}:")
+                    if hasattr(location.geometry, 'x'):
+                        print(f"  Coordinates: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
+                    print(f"  Vehicle Count (LSOA): {location['Total cars or vans']}")
+                    print(f"  Vehicle Weight: {location['vehicle_weight']:.3f}")
+                    if '2021 super output area - lower layer' in location:
+                        print(f"  LSOA: {location['2021 super output area - lower layer']}")
+            else:
+                print("Optimization failed - check suitable locations file")
+        else:
+            print("No suitable locations found for optimization")
+    else:
+        print("Geospatial analysis failed - cannot proceed with optimization")
+
+    # Get vehicle count data for reference
     print("\n" + "="*60)
-    print("INDIVIDUAL COMPONENT ANALYSES")
+    print("VEHICLE COUNT ANALYSIS")
     print("="*60)
     
-    # # Original individual analyses for comparison
-    # print("\n1. EV charger locations:")
-    # print_ev_charger_locations(ev_charger_file)
-    #
-    # print("\n2. Pavement suitability:")
-    # suitable_areas = filter_suitable_pavements(pavement_file)
-    # if suitable_areas is not None:
-    #     print(f"Total suitable pavement areas: {len(suitable_areas)}")
-    #
-    # print("\n3. Road width analysis:")
-    # print_suitable_road_widths(highway_file)
-    #
-    # print("\n4. Vehicle count analysis:")
-    # analyse_vehicle_count(vehicle_file)
+    vehicle_summary = get_vehicle_count_summary(vehicle_file)
+    
+    if vehicle_summary is not None:
+        print(f"\nVehicle Count Summary:")
+        print(f"- Total areas analyzed: {vehicle_summary['total_areas']}")
+        print(f"- Total vehicles across all areas: {vehicle_summary['total_vehicles']:,}")
+        print(f"- Average vehicles per area: {vehicle_summary['average_vehicles_per_area']:.2f}")
+        print(f"- Maximum vehicles in an area: {vehicle_summary['max_vehicles_in_area']:,}")
+        print(f"- Minimum vehicles in an area: {vehicle_summary['min_vehicles_in_area']:,}")

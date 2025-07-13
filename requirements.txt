@@ -10,3 +10,6 @@ pytz==2025.2
 shapely==2.1.1
 six==1.17.0
 tzdata==2025.2
+matplotlib~=3.10.3
+scikit-learn~=1.7.0
+scipy~=1.16.0
