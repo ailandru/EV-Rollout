@@ -3,12 +3,15 @@ import geopandas as gpd
 import pandas as pd
 
 
-def analyse_vehicle_count(file_path: str) -> None:
+def analyse_vehicle_count(file_path: str) -> gpd.GeoDataFrame:
     """
-    Calculate and print total vehicles per area in descending order.
+    Calculate and return total vehicles per area in descending order.
 
     Arguments:
         file_path (str): Path to the GeoPackage file containing vehicle count data
+    
+    Returns:
+        gpd.GeoDataFrame: GeoDataFrame with vehicle count data including geometry
     """
     try:
         # Read the GeoPackage file
@@ -24,12 +27,9 @@ def analyse_vehicle_count(file_path: str) -> None:
         )
 
         # Sort by total vehicles in descending order
-        sorted_areas = gdf[['2021 super output area - lower layer', 'Total cars or vans']].sort_values(
-            by='Total cars or vans',
-            ascending=False
-        )
+        sorted_areas = gdf.sort_values(by='Total cars or vans', ascending=False)
 
-        # Print results
+        # Print results for logging
         print("\nVehicle Count Analysis by Area (Sorted by Total):")
         print("-" * 70)
         for idx, row in sorted_areas.iterrows():
@@ -44,5 +44,38 @@ def analyse_vehicle_count(file_path: str) -> None:
         print(f"Maximum vehicles in an area: {sorted_areas['Total cars or vans'].max():,}")
         print(f"Minimum vehicles in an area: {sorted_areas['Total cars or vans'].min():,}")
 
+        return sorted_areas
+
     except Exception as e:
         print(f"Error processing the file: {e}")
+        return None
+
+
+def get_vehicle_count_summary(file_path: str) -> dict:
+    """
+    Get summary statistics for vehicle count data.
+    
+    Arguments:
+        file_path (str): Path to the GeoPackage file containing vehicle count data
+    
+    Returns:
+        dict: Summary statistics including total, average, max, min vehicles per area
+    """
+    try:
+        vehicle_data = analyse_vehicle_count(file_path)
+        
+        if vehicle_data is not None:
+            return {
+                'total_vehicles': vehicle_data['Total cars or vans'].sum(),
+                'average_vehicles_per_area': vehicle_data['Total cars or vans'].mean(),
+                'max_vehicles_in_area': vehicle_data['Total cars or vans'].max(),
+                'min_vehicles_in_area': vehicle_data['Total cars or vans'].min(),
+                'total_areas': len(vehicle_data),
+                'vehicle_data': vehicle_data
+            }
+        else:
+            return None
+            
+    except Exception as e:
+        print(f"Error getting vehicle count summary: {e}")
+        return None
