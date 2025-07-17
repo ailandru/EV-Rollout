@@ -42,7 +42,7 @@ def load_and_prepare_data(ev_charger_file, highway_file, pavement_file):
         return None, None, None
 
 
-def create_exclusion_zones(ev_chargers, buffer_distance_meters=500):
+def create_exclusion_zones(ev_chargers, buffer_distance_meters=100):
     """
     Create buffer zones around existing EV chargers.
     
@@ -167,7 +167,7 @@ def find_pavements_near_roads(pavements_outside, roads_outside_or_partial, max_d
 
 
 def analyze_ev_charger_suitability(ev_charger_file, highway_file, pavement_file, 
-                                   buffer_distance=500, min_road_width=5, 
+                                   buffer_distance=100, min_road_width=5,
                                    max_pavement_road_distance=50):
     """
     Complete analysis pipeline for EV charger suitability.

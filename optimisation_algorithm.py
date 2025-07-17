@@ -38,7 +38,7 @@ def extract_coordinates(gdf):
 
 def assign_vehicle_weights(suitable_locations, vehicle_data):
     """
-    Assign vehicle count weights to suitable locations based on spatial intersection.
+    vehicle_weight = (vehicle_count - min_vehicle_count) / (max_vehicle_count - min_vehicle_count)
     
     Arguments:
         suitable_locations (gpd.GeoDataFrame): Suitable EV charger locations
