@@ -3,6 +3,7 @@ import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Point
 from shapely.ops import unary_union
+import os
 
 
 def load_and_prepare_data(ev_charger_file, highway_file, pavement_file):
@@ -166,6 +167,52 @@ def find_pavements_near_roads(pavements_outside, roads_outside_or_partial, max_d
         return None
 
 
+def convert_polygon_pavements_to_points(polygon_pavements):
+    """
+    Convert polygon pavement geometries to point centroids.
+    
+    Arguments:
+        polygon_pavements (gpd.GeoDataFrame): GeoDataFrame with polygon geometries
+    
+    Returns:
+        gpd.GeoDataFrame: GeoDataFrame with point geometries (centroids)
+    """
+    try:
+        print("Converting polygon pavements to point centroids...")
+        
+        # Create a copy of the GeoDataFrame
+        points_gdf = polygon_pavements.copy()
+        
+        # Convert each geometry to its centroid point
+        point_geometries = []
+        for geometry in polygon_pavements.geometry:
+            if geometry.geom_type in ['Polygon', 'MultiPolygon']:
+                # Use centroid for polygons
+                centroid = geometry.centroid
+                point_geometries.append(Point(centroid.x, centroid.y))
+            elif geometry.geom_type == 'Point':
+                # Already a point, keep as is
+                point_geometries.append(geometry)
+            else:
+                # For other geometry types, use centroid
+                centroid = geometry.centroid
+                point_geometries.append(Point(centroid.x, centroid.y))
+        
+        # Update the geometry column with points
+        points_gdf.geometry = point_geometries
+        
+        # Add explicit longitude and latitude columns for reference
+        points_gdf['longitude'] = [geom.x for geom in point_geometries]
+        points_gdf['latitude'] = [geom.y for geom in point_geometries]
+        
+        print(f"Converted {len(points_gdf)} polygon pavements to point centroids")
+        return points_gdf
+        
+    except Exception as e:
+        print(f"Error converting polygons to points: {e}")
+        return None
+
+
 def analyze_ev_charger_suitability(ev_charger_file, highway_file, pavement_file, 
                                    buffer_distance=100, min_road_width=5,
                                    max_pavement_road_distance=50):
@@ -226,10 +273,18 @@ def analyze_ev_charger_suitability(ev_charger_file, highway_file, pavement_file,
     
     if final_suitable_pavements is None:
         return None
+
+    # Step 6: Convert polygon pavements to point centroids
+    print(f"\n6. Converting suitable polygon pavements to point centroids...")
+    final_suitable_points = convert_polygon_pavements_to_points(final_suitable_pavements)
+    
+    if final_suitable_points is None:
+        return None
     
     # Compile results
     results = {
-        'final_suitable_pavements': final_suitable_pavements,
+        'final_suitable_pavements': final_suitable_pavements,  # Keep original polygons
+        'final_suitable_points': final_suitable_points,        # Add point centroids
         'suitable_roads': roads_outside_or_partial,
         'exclusion_zones': exclusion_zones,
         'original_ev_chargers': ev_chargers,
@@ -237,6 +292,7 @@ def analyze_ev_charger_suitability(ev_charger_file, highway_file, pavement_file,
             'total_existing_ev_chargers': len(ev_chargers),
             'total_suitable_roads': len(roads_outside_or_partial),
             'total_suitable_pavements': len(final_suitable_pavements),
+            'total_suitable_points': len(final_suitable_points),
             'exclusion_buffer_distance': buffer_distance,
             'min_road_width': min_road_width,
             'max_pavement_road_distance': max_pavement_road_distance
@@ -249,7 +305,8 @@ def analyze_ev_charger_suitability(ev_charger_file, highway_file, pavement_file,
     print(f"Final Results:")
     print(f"- Existing EV chargers: {results['summary']['total_existing_ev_chargers']}")
     print(f"- Suitable roads (outside or partial): {results['summary']['total_suitable_roads']}")
-    print(f"- Suitable pavement locations: {results['summary']['total_suitable_pavements']}")
+    print(f"- Suitable pavement locations (polygons): {results['summary']['total_suitable_pavements']}")
+    print(f"- Suitable point locations (centroids): {results['summary']['total_suitable_points']}")
     print(f"- Exclusion buffer: {buffer_distance}m")
     print(f"- Minimum road width: {min_road_width}m")
     print(f"- Maximum pavement-road distance: {max_pavement_road_distance}m")
@@ -266,13 +323,19 @@ def save_results(results, output_dir="output"):
         output_dir (str): Output directory path
     """
     try:
-        import os
         os.makedirs(output_dir, exist_ok=True)
         
-        # Save suitable pavement locations
+        # Save suitable pavement locations (original polygons)
         if results['final_suitable_pavements'] is not None:
             results['final_suitable_pavements'].to_file(
                 os.path.join(output_dir, "suitable_ev_locations.gpkg"), 
+                driver='GPKG'
+            )
+        
+        # Save suitable point locations (centroids)
+        if results['final_suitable_points'] is not None:
+            results['final_suitable_points'].to_file(
+                os.path.join(output_dir, "suitable_ev_point_locations.gpkg"), 
                 driver='GPKG'
             )
         
@@ -291,6 +354,11 @@ def save_results(results, output_dir="output"):
             )
         
         print(f"Results saved to {output_dir}/ directory")
+        print(f"Files created:")
+        print(f"  - suitable_ev_locations.gpkg (original polygons)")
+        print(f"  - suitable_ev_point_locations.gpkg (point centroids)")
+        print(f"  - suitable_roads.gpkg")
+        print(f"  - exclusion_zones.gpkg")
         
     except Exception as e:
         print(f"Error saving results: {e}")
