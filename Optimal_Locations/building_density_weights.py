@@ -136,10 +136,10 @@ def calculate_building_proximity_weights(gdf, buildings):
 
 def assign_building_weights_to_ev_locations(suitable_ev_locations_file, buildings_file):
     """
-    Assign building proximity weights to suitable EV locations.
+    Assign building proximity weights to suitable EV locations (now point centroids).
     
     Arguments:
-        suitable_ev_locations_file (str): Path to suitable EV locations file
+        suitable_ev_locations_file (str): Path to suitable EV point locations file
         buildings_file (str): Path to buildings file
     
     Returns:
@@ -148,6 +148,7 @@ def assign_building_weights_to_ev_locations(suitable_ev_locations_file, building
     try:
         print("\n" + "="*60)
         print("ASSIGNING BUILDING WEIGHTS TO EV LOCATIONS")
+        print("Using point centroids for analysis")
         print("="*60)
         
         # Load data
@@ -161,13 +162,19 @@ def assign_building_weights_to_ev_locations(suitable_ev_locations_file, building
         if ev_locations.crs != 'EPSG:4326':
             ev_locations = ev_locations.to_crs('EPSG:4326')
         
-        print(f"Processing {len(ev_locations)} suitable EV locations...")
+        print(f"Processing {len(ev_locations)} suitable EV locations (geometry type: {ev_locations.geometry.iloc[0].geom_type})...")
+        
+        # Verify we're working with points
+        if ev_locations.geometry.iloc[0].geom_type == 'Point':
+            print("✓ Confirmed input data contains point geometries")
+        else:
+            print(f"Warning: Expected points, but found {ev_locations.geometry.iloc[0].geom_type}")
         
         # Calculate building proximity weights
         weighted_ev_locations = calculate_building_proximity_weights(ev_locations, buildings)
         
         if weighted_ev_locations is not None:
-            print(f"Successfully assigned building weights to {len(weighted_ev_locations)} EV locations")
+            print(f"Successfully assigned building weights to {len(weighted_ev_locations)} EV locations (points)")
             return weighted_ev_locations
         else:
             return None
@@ -225,18 +232,21 @@ def save_weighted_results(weighted_ev_locations, weighted_roads, output_dir="out
     Save weighted results to GPKG files.
     
     Arguments:
-        weighted_ev_locations (gpd.GeoDataFrame): Weighted EV locations
+        weighted_ev_locations (gpd.GeoDataFrame): Weighted EV locations (points)
         weighted_roads (gpd.GeoDataFrame): Weighted roads
         output_dir (str): Output directory path
     """
     try:
         os.makedirs(output_dir, exist_ok=True)
         
-        # Save weighted EV locations
+        # Save weighted EV locations (now points)
         if weighted_ev_locations is not None:
             output_file = os.path.join(output_dir, "weighted_ev_locations.gpkg")
             weighted_ev_locations.to_file(output_file, driver='GPKG')
-            print(f"Saved weighted EV locations to {output_file}")
+            
+            # Verify geometry type in saved file
+            geometry_type = weighted_ev_locations.geometry.iloc[0].geom_type
+            print(f"Saved weighted EV locations ({geometry_type}s) to {output_file}")
         
         # Save weighted roads
         if weighted_roads is not None:
@@ -253,9 +263,10 @@ def save_weighted_results(weighted_ev_locations, weighted_roads, output_dir="out
 def process_building_density_weights(suitable_ev_locations_file, suitable_roads_file, buildings_file, output_dir="output"):
     """
     Main function to process building density weights for both EV locations and roads.
+    Now uses point centroids for EV locations instead of polygons.
     
     Arguments:
-        suitable_ev_locations_file (str): Path to suitable EV locations file
+        suitable_ev_locations_file (str): Path to suitable EV point locations file
         suitable_roads_file (str): Path to suitable roads file
         buildings_file (str): Path to buildings file
         output_dir (str): Output directory path
@@ -266,9 +277,10 @@ def process_building_density_weights(suitable_ev_locations_file, suitable_roads_
     try:
         print("\n" + "="*80)
         print("STARTING BUILDING DENSITY WEIGHTING ANALYSIS")
+        print("Using point centroids for EV locations")
         print("="*80)
         
-        # Process EV locations
+        # Process EV locations (now points)
         weighted_ev_locations = assign_building_weights_to_ev_locations(
             suitable_ev_locations_file, buildings_file
         )
@@ -291,6 +303,7 @@ def process_building_density_weights(suitable_ev_locations_file, suitable_roads_
                     'total_weighted_roads': len(weighted_roads) if weighted_roads is not None else 0,
                     'avg_ev_weight': weighted_ev_locations['building_proximity_weight'].mean() if weighted_ev_locations is not None else 0,
                     'avg_road_weight': weighted_roads['building_proximity_weight'].mean() if weighted_roads is not None else 0,
+                    'ev_locations_geometry_type': weighted_ev_locations.geometry.iloc[0].geom_type if weighted_ev_locations is not None else 'None'
                 }
             }
             
@@ -298,7 +311,7 @@ def process_building_density_weights(suitable_ev_locations_file, suitable_roads_
             print("BUILDING DENSITY WEIGHTING COMPLETE")
             print("="*80)
             print(f"Results:")
-            print(f"- Weighted EV locations: {results['summary']['total_weighted_ev_locations']}")
+            print(f"- Weighted EV locations: {results['summary']['total_weighted_ev_locations']} ({results['summary']['ev_locations_geometry_type']}s)")
             print(f"- Weighted roads: {results['summary']['total_weighted_roads']}")
             if results['summary']['total_weighted_ev_locations'] > 0:
                 print(f"- Average EV location weight: {results['summary']['avg_ev_weight']:.3f}")

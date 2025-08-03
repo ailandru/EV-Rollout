@@ -34,15 +34,17 @@ if __name__ == "__main__":
     if results is not None:
         save_results(results, output_dir=output_dir)
         print(f"\nTotal suitable locations found: {len(results['final_suitable_pavements'])}")
+        print(f"Total suitable point locations created: {len(results['final_suitable_points'])}")
         
-        # Run building density weighting analysis
-        if len(results['final_suitable_pavements']) > 0:
+        # Run building density weighting analysis using the new point locations
+        if len(results['final_suitable_points']) > 0:
             print("\n" + "="*60)
             print("RUNNING BUILDING DENSITY WEIGHTING ANALYSIS")
+            print("Using point centroids instead of polygon pavements")
             print("="*60)
             
-            # Paths to the generated files
-            suitable_locations_file = os.path.join(output_dir, "suitable_ev_locations.gpkg")
+            # Paths to the generated files - using the new point locations file
+            suitable_locations_file = os.path.join(output_dir, "suitable_ev_point_locations.gpkg")
             suitable_roads_file = os.path.join(output_dir, "suitable_roads.gpkg")
             
             # Run building density weighting
@@ -64,6 +66,7 @@ if __name__ == "__main__":
                     print(f"- Lowest weighted location: {ev_weights.min():.3f}")
                     print(f"- Average weight: {ev_weights.mean():.3f}")
                     print(f"- Standard deviation: {ev_weights.std():.3f}")
+                    print(f"- Geometry type: {building_weight_results['weighted_ev_locations'].geometry.iloc[0].geom_type}")
                 
                 if building_weight_results['weighted_roads'] is not None:
                     road_weights = building_weight_results['weighted_roads']['building_proximity_weight']
@@ -75,16 +78,16 @@ if __name__ == "__main__":
             else:
                 print("Building density weighting analysis failed")
         else:
-            print("No suitable locations found for building density weighting")
+            print("No suitable point locations found for building density weighting")
             
         # COMMENTED OUT: Optimization algorithm
-        # if len(results['final_suitable_pavements']) > 0:
+        # if len(results['final_suitable_points']) > 0:
         #     print("\n" + "="*60)
         #     print("RUNNING OPTIMIZATION ALGORITHM")
         #     print("="*60)
         #     
-        #     # Paths to the generated files
-        #     suitable_locations_file = os.path.join(output_dir, "suitable_ev_locations.gpkg")
+        #     # Paths to the generated files - using point locations
+        #     suitable_locations_file = os.path.join(output_dir, "suitable_ev_point_locations.gpkg")
         #     
         #     # Run optimization
         #     optimization_results = optimize_ev_charger_locations(
@@ -120,7 +123,7 @@ if __name__ == "__main__":
         #     else:
         #         print("Optimization failed - check suitable locations file")
         # else:
-        #     print("No suitable locations found for optimization")
+        #     print("No suitable point locations found for optimization")
     else:
         print("Geospatial analysis failed - cannot proceed with building density weighting")
 
