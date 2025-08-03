@@ -27,7 +27,7 @@ if __name__ == "__main__":
         pavement_file=pavement_file,
         buffer_distance=100,  # 100m exclusion zones
         min_road_width=5,     # 5m minimum road width
-        max_pavement_road_distance=50  # 50m max distance from pavement to road
+        max_pavement_road_distance=3  # 3m max distance from pavement to road
     )
 
     # Save results if analysis was successful
