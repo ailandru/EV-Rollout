@@ -6,6 +6,7 @@ from constant.suitable_road_width import print_suitable_road_widths
 from constant.vehicle_count import analyse_vehicle_count, get_vehicle_count_summary
 from geospatial_processing import analyze_ev_charger_suitability, save_results
 from Optimal_Locations.building_density_weights import process_building_density_weights
+from Optimal_Locations.vehicle_weights import process_vehicle_weights
 # from optimisation_algorithm import optimize_ev_charger_locations, save_optimization_results, visualize_optimization_results
 
 if __name__ == "__main__":
@@ -110,53 +111,62 @@ if __name__ == "__main__":
                 print("Building density weighting analysis failed")
         else:
             print("No suitable point locations found for building density weighting")
+
+        # NEW: Run vehicle weighting analysis
+        if len(final_suitable_points) > 0:
+            print("\n" + "="*60)
+            print("RUNNING VEHICLE WEIGHTING ANALYSIS")
+            print("Using min-max normalization (0-1 scale)")
+            print("="*60)
             
-        # COMMENTED OUT: Optimization algorithm
-        # if len(final_suitable_points) > 0:
-        #     print("\n" + "="*60)
-        #     print("RUNNING OPTIMIZATION ALGORITHM")
-        #     print("="*60)
-        #     
-        #     # Paths to the generated files - using point locations
-        #     suitable_locations_file = os.path.join(output_dir, "suitable_ev_point_locations.gpkg")
-        #     
-        #     # Run optimization
-        #     optimization_results = optimize_ev_charger_locations(
-        #         existing_chargers_file=ev_charger_file,
-        #         suitable_locations_file=suitable_locations_file,
-        #         vehicle_data_file=vehicle_file,
-        #         n_clusters=None,  # Auto-determine optimal clusters
-        #         n_locations_per_cluster=2  # Select 2 locations per cluster
-        #     )
-        #     
-        #     if optimization_results is not None:
-        #         # Save optimization results
-        #         save_optimization_results(optimization_results, output_dir=output_dir)
-        #         
-        #         # Create visualization
-        #         visualize_optimization_results(optimization_results, output_dir=output_dir)
-        #         
-        #         # Display selected locations
-        #         print("\n" + "="*60)
-        #         print("SELECTED OPTIMAL LOCATIONS")
-        #         print("="*60)
-        #         
-        #         selected_locations = optimization_results['selected_locations']
-        #         
-        #         for idx, location in selected_locations.iterrows():
-        #             print(f"\nOptimal Location {idx + 1}:")
-        #             if hasattr(location.geometry, 'x'):
-        #                 print(f"  Coordinates: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
-        #             print(f"  Vehicle Count (LSOA): {location['Total cars or vans']}")
-        #             print(f"  Vehicle Weight: {location['vehicle_weight']:.3f}")
-        #             if '2021 super output area - lower layer' in location:
-        #                 print(f"  LSOA: {location['2021 super output area - lower layer']}")
-        #     else:
-        #         print("Optimization failed - check suitable locations file")
-        # else:
-        #     print("No suitable point locations found for optimization")
+            # Path to the generated EV point locations file
+            suitable_locations_file = os.path.join(output_dir, "suitable_ev_point_locations.gpkg")
+            
+            # Check if the suitable locations file exists before running vehicle weighting
+            if os.path.exists(suitable_locations_file):
+                # Run vehicle weighting analysis with min-max normalization
+                vehicle_weight_results = process_vehicle_weights(
+                    suitable_ev_locations_file=suitable_locations_file,
+                    vehicle_data_file=vehicle_file,
+                    output_dir=output_dir
+                )
+                
+                if vehicle_weight_results is not None:
+                    print("\nVehicle weighting analysis completed successfully!")
+                    
+                    # Display detailed statistics about the vehicle weighted results
+                    vehicle_weights = vehicle_weight_results['vehicle_weight']
+                    vehicle_counts = vehicle_weight_results['Total cars or vans']
+                    
+                    print(f"\nVehicle Weight Summary:")
+                    print(f"- Total locations processed: {len(vehicle_weight_results)}")
+                    print(f"- Geometry type: {vehicle_weight_results.geometry.iloc[0].geom_type}")
+                    print(f"\nVehicle Count Statistics:")
+                    print(f"- Vehicle count range: {vehicle_counts.min()} to {vehicle_counts.max()}")
+                    print(f"- Average vehicle count: {vehicle_counts.mean():.1f}")
+                    print(f"- Median vehicle count: {vehicle_counts.median():.1f}")
+                    print(f"\nVehicle Weight Statistics (Min-Max Normalized 0-1 Scale):")
+                    print(f"- Weight range: {vehicle_weights.min():.6f} to {vehicle_weights.max():.6f}")
+                    print(f"- Average weight: {vehicle_weights.mean():.3f}")
+                    print(f"- Median weight: {vehicle_weights.median():.3f}")
+                    print(f"- Standard deviation: {vehicle_weights.std():.3f}")
+                    
+                    # Show top 5 highest vehicle weighted locations
+                    print(f"\nTop 5 Highest Vehicle Weighted Locations:")
+                    top_vehicle_locations = vehicle_weight_results.nlargest(5, 'vehicle_weight')
+                    for i, (idx, location) in enumerate(top_vehicle_locations.iterrows(), 1):
+                        print(f"  {i}. Weight: {location['vehicle_weight']:.6f}, "
+                              f"Vehicles: {location['Total cars or vans']}, "
+                              f"Coords: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
+                else:
+                    print("Vehicle weighting analysis failed")
+            else:
+                print(f"Suitable locations file {suitable_locations_file} not found - skipping vehicle weighting")
+        else:
+            print("No suitable point locations found for vehicle weighting")
+
     else:
-        print("Geospatial analysis failed - cannot proceed with building density weighting")
+        print("Geospatial analysis failed - cannot proceed with building density weighting or vehicle weighting")
 
     # Get vehicle count data for reference
     print("\n" + "="*60)

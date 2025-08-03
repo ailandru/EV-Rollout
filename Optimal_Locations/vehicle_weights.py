@@ -8,6 +8,11 @@ from shapely.geometry import Point
 import matplotlib.pyplot as plt
 from scipy.spatial.distance import cdist
 
+"""Vehicle weighting analysis for EV charger locations."""
+import geopandas as gpd
+import numpy as np
+import os
+
 
 def extract_coordinates(gdf):
     """
@@ -38,19 +43,24 @@ def extract_coordinates(gdf):
 
 def assign_vehicle_weights(suitable_locations, vehicle_data):
     """
-    vehicle_weight = (vehicle_count - min_vehicle_count) / (max_vehicle_count - min_vehicle_count)
+    Assign vehicle count weights to suitable EV charger locations using min-max normalization.
+    
+    Weights are calculated as: vehicle_weight = (vehicle_count - min_vehicle_count) / (max_vehicle_count - min_vehicle_count)
+    This ensures all weights are in the range [0, 1].
     
     Arguments:
         suitable_locations (gpd.GeoDataFrame): Suitable EV charger locations
         vehicle_data (gpd.GeoDataFrame): Vehicle count data by LSOA
     
     Returns:
-        gpd.GeoDataFrame: Suitable locations with vehicle count weights
+        gpd.GeoDataFrame: Suitable locations with vehicle count weights (0-1 scale)
     """
     try:
         # Ensure both datasets have the same CRS
         if suitable_locations.crs != vehicle_data.crs:
             vehicle_data = vehicle_data.to_crs(suitable_locations.crs)
+        
+        print(f"Spatial join: matching {len(suitable_locations)} EV locations with {len(vehicle_data)} LSOA areas")
         
         # Spatial join to assign vehicle counts to suitable locations
         locations_with_weights = gpd.sjoin(
@@ -60,24 +70,164 @@ def assign_vehicle_weights(suitable_locations, vehicle_data):
             predicate='within'
         )
         
-        # Fill NaN values with minimum vehicle count (for locations not within any LSOA)
+        # Handle locations not within any LSOA by filling with minimum vehicle count
         min_vehicle_count = vehicle_data['Total cars or vans'].min()
         locations_with_weights['Total cars or vans'] = locations_with_weights['Total cars or vans'].fillna(min_vehicle_count)
         
-        # Normalize weights to 0-1 scale for better clustering
+        # Get min and max vehicle counts for normalization
         max_vehicles = locations_with_weights['Total cars or vans'].max()
         min_vehicles = locations_with_weights['Total cars or vans'].min()
         
-        locations_with_weights['vehicle_weight'] = (
-            (locations_with_weights['Total cars or vans'] - min_vehicles) / 
-            (max_vehicles - min_vehicles)
-        )
+        # Apply min-max normalization to ensure weights are in [0, 1] range
+        if max_vehicles > min_vehicles:
+            # Standard min-max normalization formula
+            locations_with_weights['vehicle_weight'] = (
+                (locations_with_weights['Total cars or vans'] - min_vehicles) / 
+                (max_vehicles - min_vehicles)
+            )
+        else:
+            # If all vehicle counts are the same, assign equal weights of 0.5
+            locations_with_weights['vehicle_weight'] = 0.5
+        
+        # Verify weights are in [0, 1] range
+        weight_min = locations_with_weights['vehicle_weight'].min()
+        weight_max = locations_with_weights['vehicle_weight'].max()
+        
+        print(f"Vehicle count statistics:")
+        print(f"- Vehicle count range: {min_vehicles} to {max_vehicles}")
+        print(f"- Locations with min vehicle count: {(locations_with_weights['Total cars or vans'] == min_vehicles).sum()}")
+        print(f"- Locations with max vehicle count: {(locations_with_weights['Total cars or vans'] == max_vehicles).sum()}")
+        print(f"")
+        print(f"Vehicle weight statistics (min-max normalized to 0-1 scale):")
+        print(f"- Weight range: {weight_min:.3f} to {weight_max:.3f}")
+        print(f"- Average weight: {locations_with_weights['vehicle_weight'].mean():.3f}")
+        print(f"- Standard deviation: {locations_with_weights['vehicle_weight'].std():.3f}")
+        
+        # Verify normalization worked correctly
+        if not (0.0 <= weight_min <= weight_max <= 1.0):
+            print(f"WARNING: Weights are not in [0,1] range! Min: {weight_min}, Max: {weight_max}")
+        else:
+            print(f"✓ Confirmed: All weights are properly normalized to [0,1] range")
         
         print(f"Assigned vehicle weights to {len(locations_with_weights)} suitable locations")
+        
         return locations_with_weights
         
     except Exception as e:
         print(f"Error assigning vehicle weights: {e}")
+        return None
+
+
+def process_vehicle_weights(suitable_ev_locations_file, vehicle_data_file, output_dir="output"):
+    """
+    Main function to process vehicle weights for EV locations using min-max normalization.
+    
+    Arguments:
+        suitable_ev_locations_file (str): Path to suitable EV point locations file
+        vehicle_data_file (str): Path to vehicle count data file
+        output_dir (str): Output directory path
+    
+    Returns:
+        gpd.GeoDataFrame: Weighted locations with weights in [0,1] range or None if failed
+    """
+    print("Starting vehicle weighting analysis with min-max normalization...")
+    print("=" * 60)
+    
+    try:
+        # Load data
+        print("1. Loading data...")
+        suitable_locations = gpd.read_file(suitable_ev_locations_file)
+        vehicle_data = gpd.read_file(vehicle_data_file)
+        
+        # Ensure data has CRS
+        if suitable_locations.crs is None:
+            suitable_locations.set_crs('EPSG:4326', inplace=True)
+        if vehicle_data.crs is None:
+            vehicle_data.set_crs('EPSG:4326', inplace=True)
+        
+        # Calculate vehicle counts if not already done
+        if 'Total cars or vans' not in vehicle_data.columns:
+            print("   Calculating total vehicle counts...")
+            vehicle_data['Total cars or vans'] = (
+                vehicle_data['1 car or van in household'] +
+                vehicle_data['2 cars or vans in household'] * 2 +
+                vehicle_data['3 or more cars or vans in household'] * 3
+            )
+        
+        print(f"   Loaded {len(suitable_locations)} suitable locations")
+        print(f"   Loaded {len(vehicle_data)} vehicle data areas")
+        print(f"   Vehicle count range across all areas: {vehicle_data['Total cars or vans'].min()} to {vehicle_data['Total cars or vans'].max()}")
+        
+        # Assign vehicle weights to suitable locations using min-max normalization
+        print("\n2. Assigning vehicle count weights using min-max normalization (0-1 scale)...")
+        weighted_locations = assign_vehicle_weights(suitable_locations, vehicle_data)
+        
+        if weighted_locations is None:
+            return None
+        
+        # Create output directory
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Save weighted locations
+        output_file = os.path.join(output_dir, "vehicle_weights_ev_locations.gpkg")
+        weighted_locations.to_file(output_file, driver='GPKG')
+        
+        print(f"\n3. Results saved to: {output_file}")
+        
+        # Display detailed statistics
+        print("\n" + "=" * 60)
+        print("VEHICLE WEIGHTING ANALYSIS COMPLETE")
+        print("=" * 60)
+        
+        vehicle_weights = weighted_locations['vehicle_weight']
+        vehicle_counts = weighted_locations['Total cars or vans']
+        
+        print(f"Results Summary:")
+        print(f"- Total locations processed: {len(weighted_locations)}")
+        print(f"- Geometry type: {weighted_locations.geometry.iloc[0].geom_type}")
+        print(f"")
+        print(f"Vehicle Count Statistics:")
+        print(f"- Vehicle count range: {vehicle_counts.min()} to {vehicle_counts.max()}")
+        print(f"- Average vehicle count: {vehicle_counts.mean():.1f}")
+        print(f"- Median vehicle count: {vehicle_counts.median():.1f}")
+        print(f"")
+        print(f"Vehicle Weight Statistics (Min-Max Normalized 0-1 Scale):")
+        print(f"- Weight range: {vehicle_weights.min():.6f} to {vehicle_weights.max():.6f}")
+        print(f"- Average weight: {vehicle_weights.mean():.3f}")
+        print(f"- Median weight: {vehicle_weights.median():.3f}")
+        print(f"- Standard deviation: {vehicle_weights.std():.3f}")
+        print(f"- Locations with weight = 0.0: {(vehicle_weights == 0.0).sum()}")
+        print(f"- Locations with weight = 1.0: {(vehicle_weights == 1.0).sum()}")
+        
+        # Show distribution of weights
+        print(f"\nWeight Distribution:")
+        weight_bins = np.arange(0, 1.1, 0.1)
+        for i in range(len(weight_bins)-1):
+            count = ((vehicle_weights >= weight_bins[i]) & (vehicle_weights < weight_bins[i+1])).sum()
+            if i == len(weight_bins)-2:  # Last bin includes 1.0
+                count = ((vehicle_weights >= weight_bins[i]) & (vehicle_weights <= weight_bins[i+1])).sum()
+            print(f"- Weights {weight_bins[i]:.1f}-{weight_bins[i+1]:.1f}: {count} locations")
+        
+        # Show top 5 highest weighted locations
+        print(f"\nTop 5 Highest Weighted Locations:")
+        top_locations = weighted_locations.nlargest(5, 'vehicle_weight')
+        for i, (idx, location) in enumerate(top_locations.iterrows(), 1):
+            print(f"  {i}. Weight: {location['vehicle_weight']:.6f}, "
+                  f"Vehicles: {location['Total cars or vans']}, "
+                  f"Coords: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
+        
+        # Show bottom 5 lowest weighted locations
+        print(f"\nBottom 5 Lowest Weighted Locations:")
+        bottom_locations = weighted_locations.nsmallest(5, 'vehicle_weight')
+        for i, (idx, location) in enumerate(bottom_locations.iterrows(), 1):
+            print(f"  {i}. Weight: {location['vehicle_weight']:.6f}, "
+                  f"Vehicles: {location['Total cars or vans']}, "
+                  f"Coords: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
+        
+        return weighted_locations
+        
+    except Exception as e:
+        print(f"Error in vehicle weighting analysis: {e}")
         return None
 
 
