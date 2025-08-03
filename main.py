@@ -33,55 +33,86 @@ if __name__ == "__main__":
     # Save results if analysis was successful
     if results is not None:
         save_results(results, output_dir=output_dir)
-        print(f"\nTotal suitable locations found: {len(results['final_suitable_pavements'])}")
-        print(f"Total suitable point locations created: {len(results['final_suitable_points'])}")
         
-        # Run building density weighting analysis using the new point locations
-        if len(results['final_suitable_points']) > 0:
+        # Safely access dictionary keys with proper error handling
+        if 'final_suitable_pavements' in results:
+            print(f"\nTotal suitable locations found: {len(results['final_suitable_pavements'])}")
+        else:
+            print("\nWarning: 'final_suitable_pavements' not found in results")
+            
+        if 'final_suitable_points' in results:
+            print(f"Total suitable point locations created: {len(results['final_suitable_points'])}")
+            final_suitable_points = results['final_suitable_points']
+        else:
+            print("Warning: 'final_suitable_points' not found in results")
+            print("Available keys in results:", list(results.keys()))
+            # Try to use alternative key names or create empty list
+            if 'suitable_points' in results:
+                final_suitable_points = results['suitable_points']
+                print(f"Using 'suitable_points' instead: {len(final_suitable_points)} locations")
+            elif 'final_suitable_pavements' in results:
+                final_suitable_points = results['final_suitable_pavements']
+                print(f"Using 'final_suitable_pavements' as fallback: {len(final_suitable_points)} locations")
+            else:
+                final_suitable_points = []
+                print("No suitable points data available")
+        
+        # Run building density weighting analysis using only the point locations
+        if len(final_suitable_points) > 0:
             print("\n" + "="*60)
             print("RUNNING BUILDING DENSITY WEIGHTING ANALYSIS")
-            print("Using point centroids instead of polygon pavements")
+            print("Using 200m radius buffers around point locations")
             print("="*60)
             
-            # Paths to the generated files - using the new point locations file
+            # Path to the generated EV point locations file
             suitable_locations_file = os.path.join(output_dir, "suitable_ev_point_locations.gpkg")
-            suitable_roads_file = os.path.join(output_dir, "suitable_roads.gpkg")
             
-            # Run building density weighting
+            # Run building density weighting with 200m radius (EV locations only)
             building_weight_results = process_building_density_weights(
                 suitable_ev_locations_file=suitable_locations_file,
-                suitable_roads_file=suitable_roads_file,
                 buildings_file=buildings_file,
+                radius_meters=200,  # 200m radius for building density calculation
                 output_dir=output_dir
             )
             
             if building_weight_results is not None:
                 print("\nBuilding density weighting analysis completed successfully!")
                 
-                # Display some statistics about the weighted results
-                if building_weight_results['weighted_ev_locations'] is not None:
-                    ev_weights = building_weight_results['weighted_ev_locations']['building_proximity_weight']
-                    print(f"\nEV Location Weight Statistics:")
+                # Display detailed statistics about the weighted results
+                weighted_locations = building_weight_results['weighted_ev_locations']
+                if weighted_locations is not None:
+                    ev_weights = weighted_locations['building_density_weight']
+                    ev_buildings = weighted_locations['buildings_within_radius']
+                    
+                    print(f"\nEV Location Density Weight Statistics:")
+                    print(f"- Total locations processed: {len(weighted_locations)}")
+                    print(f"- Geometry type: {weighted_locations.geometry.iloc[0].geom_type}")
+                    print(f"- Radius used: {weighted_locations['radius_meters'].iloc[0]}m")
+                    print(f"\nBuilding Density Weights (0-1 scale):")
                     print(f"- Highest weighted location: {ev_weights.max():.3f}")
                     print(f"- Lowest weighted location: {ev_weights.min():.3f}")
                     print(f"- Average weight: {ev_weights.mean():.3f}")
                     print(f"- Standard deviation: {ev_weights.std():.3f}")
-                    print(f"- Geometry type: {building_weight_results['weighted_ev_locations'].geometry.iloc[0].geom_type}")
-                
-                if building_weight_results['weighted_roads'] is not None:
-                    road_weights = building_weight_results['weighted_roads']['building_proximity_weight']
-                    print(f"\nRoad Weight Statistics:")
-                    print(f"- Highest weighted road: {road_weights.max():.3f}")
-                    print(f"- Lowest weighted road: {road_weights.min():.3f}")
-                    print(f"- Average weight: {road_weights.mean():.3f}")
-                    print(f"- Standard deviation: {road_weights.std():.3f}")
+                    print(f"\nBuildings within 200m radius:")
+                    print(f"- Average buildings per location: {ev_buildings.mean():.1f}")
+                    print(f"- Max buildings per location: {ev_buildings.max()}")
+                    print(f"- Min buildings per location: {ev_buildings.min()}")
+                    print(f"- Standard deviation: {ev_buildings.std():.1f}")
+                    
+                    # Show top 5 highest weighted locations
+                    print(f"\nTop 5 Highest Weighted Locations:")
+                    top_locations = weighted_locations.nlargest(5, 'building_density_weight')
+                    for i, (idx, location) in enumerate(top_locations.iterrows(), 1):
+                        print(f"  {i}. Weight: {location['building_density_weight']:.3f}, "
+                              f"Buildings: {location['buildings_within_radius']}, "
+                              f"Coords: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
             else:
                 print("Building density weighting analysis failed")
         else:
             print("No suitable point locations found for building density weighting")
             
         # COMMENTED OUT: Optimization algorithm
-        # if len(results['final_suitable_points']) > 0:
+        # if len(final_suitable_points) > 0:
         #     print("\n" + "="*60)
         #     print("RUNNING OPTIMIZATION ALGORITHM")
         #     print("="*60)
