@@ -7,6 +7,7 @@ from constant.vehicle_count import analyse_vehicle_count, get_vehicle_count_summ
 from geospatial_processing import analyze_ev_charger_suitability, save_results
 from Optimal_Locations.building_density_weights import process_building_density_weights
 from Optimal_Locations.vehicle_weights import process_vehicle_weights
+from Optimal_Locations.weighting_ev_locations import process_combined_weights
 # from optimisation_algorithm import optimize_ev_charger_locations, save_optimization_results, visualize_optimization_results
 
 if __name__ == "__main__":
@@ -59,6 +60,7 @@ if __name__ == "__main__":
                 print("No suitable points data available")
         
         # Run building density weighting analysis using only the point locations
+        building_weight_results = None
         if len(final_suitable_points) > 0:
             print("\n" + "="*60)
             print("RUNNING BUILDING DENSITY WEIGHTING ANALYSIS")
@@ -112,7 +114,8 @@ if __name__ == "__main__":
         else:
             print("No suitable point locations found for building density weighting")
 
-        # NEW: Run vehicle weighting analysis
+        # Run vehicle weighting analysis
+        vehicle_weight_results = None
         if len(final_suitable_points) > 0:
             print("\n" + "="*60)
             print("RUNNING VEHICLE WEIGHTING ANALYSIS")
@@ -165,8 +168,60 @@ if __name__ == "__main__":
         else:
             print("No suitable point locations found for vehicle weighting")
 
+        # NEW: Run combined weighting analysis
+        if (building_weight_results is not None and vehicle_weight_results is not None):
+            print("\n" + "="*60)
+            print("RUNNING COMBINED WEIGHTING ANALYSIS")
+            print("Multiplying building_density_weight × vehicle_weight")
+            print("="*60)
+            
+            # File paths for the weighted results
+            buildings_weighted_file = os.path.join(output_dir, "buildings_weighted_ev_locations.gpkg")
+            vehicle_weighted_file = os.path.join(output_dir, "vehicle_weights_ev_locations.gpkg")
+            
+            # Check if both weighted files exist
+            if os.path.exists(buildings_weighted_file) and os.path.exists(vehicle_weighted_file):
+                # Run combined weighting analysis
+                combined_results = process_combined_weights(
+                    buildings_weighted_file=buildings_weighted_file,
+                    vehicle_weighted_file=vehicle_weighted_file,
+                    output_dir=output_dir
+                )
+                
+                if combined_results is not None:
+                    print("\nCombined weighting analysis completed successfully!")
+                    
+                    # Display summary of combined results
+                    combined_weights = combined_results['combined_weight']
+                    
+                    print(f"\nCombined Weight Summary:")
+                    print(f"- Total locations processed: {len(combined_results)}")
+                    print(f"- Combined weight range: {combined_weights.min():.6f} to {combined_weights.max():.6f}")
+                    print(f"- Average combined weight: {combined_weights.mean():.6f}")
+                    print(f"- Locations with combined weight > 0.5: {(combined_weights > 0.5).sum()}")
+                    print(f"- Locations with combined weight > 0.1: {(combined_weights > 0.1).sum()}")
+                    
+                    # Show top 3 highest combined weighted locations
+                    print(f"\nTop 3 Highest Combined Weighted Locations:")
+                    top_combined_locations = combined_results.nlargest(3, 'combined_weight')
+                    for i, (idx, location) in enumerate(top_combined_locations.iterrows(), 1):
+                        print(f"  {i}. Combined: {location['combined_weight']:.6f}")
+                        print(f"     Building Weight: {location['building_density_weight']:.3f}, "
+                              f"Vehicle Weight: {location['vehicle_weight']:.3f}")
+                        print(f"     Buildings: {location['buildings_within_radius']}, "
+                              f"Vehicles: {location['total_cars_or_vans']}")
+                        print(f"     Coords: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
+                else:
+                    print("Combined weighting analysis failed")
+            else:
+                print("Required weighted files not found:")
+                print(f"- Buildings weighted: {os.path.exists(buildings_weighted_file)}")
+                print(f"- Vehicle weighted: {os.path.exists(vehicle_weighted_file)}")
+        else:
+            print("Skipping combined weighting - both building and vehicle weighting must complete successfully")
+
     else:
-        print("Geospatial analysis failed - cannot proceed with building density weighting or vehicle weighting")
+        print("Geospatial analysis failed - cannot proceed with weighting analyses")
 
     # Get vehicle count data for reference
     print("\n" + "="*60)
