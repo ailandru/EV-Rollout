@@ -116,7 +116,6 @@ def assign_building_weights_to_ev_locations(suitable_ev_locations_file, building
     """
     try:
         print("\n" + "="*60)
-
         print("ASSIGNING BUILDING DENSITY WEIGHTS TO EV LOCATIONS")
         print(f"Using {radius_meters}m radius buffers for density calculation")
         print("="*60)
@@ -133,7 +132,6 @@ def assign_building_weights_to_ev_locations(suitable_ev_locations_file, building
             ev_locations = ev_locations.to_crs('EPSG:4326')
         
         print(f"Processing {len(ev_locations)} suitable EV locations (geometry type: {ev_locations.geometry.iloc[0].geom_type})...")
-
         
         # Verify we're working with points
         if ev_locations.geometry.iloc[0].geom_type == 'Point':
@@ -230,7 +228,6 @@ def process_building_density_weights(suitable_ev_locations_file, buildings_file,
             print(f"- Max buildings per location: {results['summary']['max_buildings_per_location']}")
             print(f"- Min buildings per location: {results['summary']['min_buildings_per_location']}")
             print(f"- Std dev buildings per location: {results['summary']['std_buildings_per_location']:.1f}")
-
             
             return results
         else:
