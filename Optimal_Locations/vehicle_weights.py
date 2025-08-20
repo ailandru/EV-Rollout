@@ -1,44 +1,29 @@
-"""Optimization algorithm for selecting optimal EV charger locations using K-means clustering."""
+"""Calculate vehicle count weights for EV charger locations using new Total Vehicles data."""
 import geopandas as gpd
 import pandas as pd
-import numpy as np
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
-from shapely.geometry import Point
-import matplotlib.pyplot as plt
-from scipy.spatial.distance import cdist
-
-"""Vehicle weighting analysis for EV charger locations."""
-import geopandas as gpd
-import numpy as np
 import os
+from shapely.geometry import Point
+import numpy as np
 
 
 def extract_coordinates(gdf):
     """
-    Extract latitude and longitude coordinates from geometry column.
+    Extract longitude and latitude coordinates from geometry column.
     
     Arguments:
-        gdf (gpd.GeoDataFrame): GeoDataFrame with geometry column
+        gdf (gpd.GeoDataFrame): GeoDataFrame with Point geometries
     
     Returns:
-        np.array: Array of [longitude, latitude] coordinates
+        gpd.GeoDataFrame: GeoDataFrame with added longitude and latitude columns
     """
     try:
-        coordinates = []
-        for geometry in gdf.geometry:
-            if geometry.geom_type == 'Point':
-                coordinates.append([geometry.x, geometry.y])
-            else:
-                # For non-point geometries, use centroid
-                centroid = geometry.centroid
-                coordinates.append([centroid.x, centroid.y])
-        
-        return np.array(coordinates)
-    
+        gdf = gdf.copy()
+        gdf['longitude'] = gdf.geometry.x
+        gdf['latitude'] = gdf.geometry.y
+        return gdf
     except Exception as e:
         print(f"Error extracting coordinates: {e}")
-        return None
+        return gdf
 
 
 def assign_vehicle_weights(suitable_locations, vehicle_data):
@@ -50,7 +35,7 @@ def assign_vehicle_weights(suitable_locations, vehicle_data):
     
     Arguments:
         suitable_locations (gpd.GeoDataFrame): Suitable EV charger locations
-        vehicle_data (gpd.GeoDataFrame): Vehicle count data by LSOA
+        vehicle_data (gpd.GeoDataFrame): Vehicle count data by LSOA with '2025 Q1' column
     
     Returns:
         gpd.GeoDataFrame: Suitable locations with vehicle count weights (0-1 scale)
@@ -65,24 +50,24 @@ def assign_vehicle_weights(suitable_locations, vehicle_data):
         # Spatial join to assign vehicle counts to suitable locations
         locations_with_weights = gpd.sjoin(
             suitable_locations, 
-            vehicle_data[['geometry', 'Total cars or vans', '2021 super output area - lower layer']], 
+            vehicle_data[['geometry', '2025 Q1', 'LSOA11CD']], 
             how='left', 
             predicate='within'
         )
         
         # Handle locations not within any LSOA by filling with minimum vehicle count
-        min_vehicle_count = vehicle_data['Total cars or vans'].min()
-        locations_with_weights['Total cars or vans'] = locations_with_weights['Total cars or vans'].fillna(min_vehicle_count)
+        min_vehicle_count = vehicle_data['2025 Q1'].min()
+        locations_with_weights['2025 Q1'] = locations_with_weights['2025 Q1'].fillna(min_vehicle_count)
         
         # Get min and max vehicle counts for normalization
-        max_vehicles = locations_with_weights['Total cars or vans'].max()
-        min_vehicles = locations_with_weights['Total cars or vans'].min()
+        max_vehicles = locations_with_weights['2025 Q1'].max()
+        min_vehicles = locations_with_weights['2025 Q1'].min()
         
         # Apply min-max normalization to ensure weights are in [0, 1] range
         if max_vehicles > min_vehicles:
             # Standard min-max normalization formula
             locations_with_weights['vehicle_weight'] = (
-                (locations_with_weights['Total cars or vans'] - min_vehicles) / 
+                (locations_with_weights['2025 Q1'] - min_vehicles) / 
                 (max_vehicles - min_vehicles)
             )
         else:
@@ -95,8 +80,8 @@ def assign_vehicle_weights(suitable_locations, vehicle_data):
         
         print(f"Vehicle count statistics:")
         print(f"- Vehicle count range: {min_vehicles} to {max_vehicles}")
-        print(f"- Locations with min vehicle count: {(locations_with_weights['Total cars or vans'] == min_vehicles).sum()}")
-        print(f"- Locations with max vehicle count: {(locations_with_weights['Total cars or vans'] == max_vehicles).sum()}")
+        print(f"- Locations with min vehicle count: {(locations_with_weights['2025 Q1'] == min_vehicles).sum()}")
+        print(f"- Locations with max vehicle count: {(locations_with_weights['2025 Q1'] == max_vehicles).sum()}")
         print(f"")
         print(f"Vehicle weight statistics (min-max normalized to 0-1 scale):")
         print(f"- Weight range: {weight_min:.3f} to {weight_max:.3f}")
@@ -120,401 +105,335 @@ def assign_vehicle_weights(suitable_locations, vehicle_data):
 
 def process_vehicle_weights(suitable_ev_locations_file, vehicle_data_file, output_dir="output"):
     """
-    Main function to process vehicle weights for EV locations using min-max normalization.
+    Complete pipeline to process vehicle weights for EV charger locations.
     
     Arguments:
-        suitable_ev_locations_file (str): Path to suitable EV point locations file
-        vehicle_data_file (str): Path to vehicle count data file
-        output_dir (str): Output directory path
+        suitable_ev_locations_file (str): Path to suitable EV locations file
+        vehicle_data_file (str): Path to wcr_Total_Cars_2011_LSOA.gpkg file
+        output_dir (str): Output directory for results
     
     Returns:
-        gpd.GeoDataFrame: Weighted locations with weights in [0,1] range or None if failed
+        gpd.GeoDataFrame: EV locations with vehicle weights
     """
-    print("Starting vehicle weighting analysis with min-max normalization...")
-    print("=" * 60)
-    
     try:
-        # Load data
-        print("1. Loading data...")
+        print("Starting vehicle weighting analysis...")
+        print("=" * 50)
+        
+        # Load suitable EV locations
+        print(f"Loading suitable EV locations from: {suitable_ev_locations_file}")
         suitable_locations = gpd.read_file(suitable_ev_locations_file)
+        print(f"Loaded {len(suitable_locations)} suitable EV locations")
+        
+        # Load vehicle data
+        print(f"Loading vehicle data from: {vehicle_data_file}")
         vehicle_data = gpd.read_file(vehicle_data_file)
+        print(f"Loaded vehicle data for {len(vehicle_data)} LSOA areas")
         
-        # Ensure data has CRS
-        if suitable_locations.crs is None:
-            suitable_locations.set_crs('EPSG:4326', inplace=True)
-        if vehicle_data.crs is None:
-            vehicle_data.set_crs('EPSG:4326', inplace=True)
+        # Verify required columns
+        if '2025 Q1' not in vehicle_data.columns:
+            print("Error: '2025 Q1' column not found in vehicle data")
+            return None
         
-        # Calculate vehicle counts if not already done
-        if 'Total cars or vans' not in vehicle_data.columns:
-            print("   Calculating total vehicle counts...")
-            vehicle_data['Total cars or vans'] = (
-                vehicle_data['1 car or van in household'] +
-                vehicle_data['2 cars or vans in household'] * 2 +
-                vehicle_data['3 or more cars or vans in household'] * 3
-            )
+        # Display vehicle data statistics
+        vehicle_counts = vehicle_data['2025 Q1']
+        print(f"Vehicle data statistics:")
+        print(f"- Total vehicles in study area: {vehicle_counts.sum():,}")
+        print(f"- Vehicle count range: {vehicle_counts.min()} to {vehicle_counts.max()}")
+        print(f"- Average vehicles per LSOA: {vehicle_counts.mean():.1f}")
         
-        print(f"   Loaded {len(suitable_locations)} suitable locations")
-        print(f"   Loaded {len(vehicle_data)} vehicle data areas")
-        print(f"   Vehicle count range across all areas: {vehicle_data['Total cars or vans'].min()} to {vehicle_data['Total cars or vans'].max()}")
+        # Extract coordinates from suitable locations
+        suitable_locations = extract_coordinates(suitable_locations)
         
-        # Assign vehicle weights to suitable locations using min-max normalization
-        print("\n2. Assigning vehicle count weights using min-max normalization (0-1 scale)...")
+        # Assign vehicle weights
+        print("\nAssigning vehicle weights using min-max normalization...")
         weighted_locations = assign_vehicle_weights(suitable_locations, vehicle_data)
         
         if weighted_locations is None:
             return None
         
-        # Create output directory
+        # Save results
         os.makedirs(output_dir, exist_ok=True)
-        
-        # Save weighted locations
         output_file = os.path.join(output_dir, "vehicle_weights_ev_locations.gpkg")
+        
+        print(f"\nSaving vehicle weighted locations to: {output_file}")
         weighted_locations.to_file(output_file, driver='GPKG')
         
-        print(f"\n3. Results saved to: {output_file}")
+        # Also save as CSV for easy inspection
+        csv_output = os.path.join(output_dir, "vehicle_weights_ev_locations.csv")
+        weights_df = weighted_locations.drop(columns=['geometry'])
+        weights_df.to_csv(csv_output, index=False)
+        print(f"Saved CSV summary to: {csv_output}")
         
-        # Display detailed statistics
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 50)
         print("VEHICLE WEIGHTING ANALYSIS COMPLETE")
-        print("=" * 60)
-        
-        vehicle_weights = weighted_locations['vehicle_weight']
-        vehicle_counts = weighted_locations['Total cars or vans']
-        
-        print(f"Results Summary:")
-        print(f"- Total locations processed: {len(weighted_locations)}")
-        print(f"- Geometry type: {weighted_locations.geometry.iloc[0].geom_type}")
-        print(f"")
-        print(f"Vehicle Count Statistics:")
-        print(f"- Vehicle count range: {vehicle_counts.min()} to {vehicle_counts.max()}")
-        print(f"- Average vehicle count: {vehicle_counts.mean():.1f}")
-        print(f"- Median vehicle count: {vehicle_counts.median():.1f}")
-        print(f"")
-        print(f"Vehicle Weight Statistics (Min-Max Normalized 0-1 Scale):")
-        print(f"- Weight range: {vehicle_weights.min():.6f} to {vehicle_weights.max():.6f}")
-        print(f"- Average weight: {vehicle_weights.mean():.3f}")
-        print(f"- Median weight: {vehicle_weights.median():.3f}")
-        print(f"- Standard deviation: {vehicle_weights.std():.3f}")
-        print(f"- Locations with weight = 0.0: {(vehicle_weights == 0.0).sum()}")
-        print(f"- Locations with weight = 1.0: {(vehicle_weights == 1.0).sum()}")
-        
-        # Show distribution of weights
-        print(f"\nWeight Distribution:")
-        weight_bins = np.arange(0, 1.1, 0.1)
-        for i in range(len(weight_bins)-1):
-            count = ((vehicle_weights >= weight_bins[i]) & (vehicle_weights < weight_bins[i+1])).sum()
-            if i == len(weight_bins)-2:  # Last bin includes 1.0
-                count = ((vehicle_weights >= weight_bins[i]) & (vehicle_weights <= weight_bins[i+1])).sum()
-            print(f"- Weights {weight_bins[i]:.1f}-{weight_bins[i+1]:.1f}: {count} locations")
-        
-        # Show top 5 highest weighted locations
-        print(f"\nTop 5 Highest Weighted Locations:")
-        top_locations = weighted_locations.nlargest(5, 'vehicle_weight')
-        for i, (idx, location) in enumerate(top_locations.iterrows(), 1):
-            print(f"  {i}. Weight: {location['vehicle_weight']:.6f}, "
-                  f"Vehicles: {location['Total cars or vans']}, "
-                  f"Coords: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
-        
-        # Show bottom 5 lowest weighted locations
-        print(f"\nBottom 5 Lowest Weighted Locations:")
-        bottom_locations = weighted_locations.nsmallest(5, 'vehicle_weight')
-        for i, (idx, location) in enumerate(bottom_locations.iterrows(), 1):
-            print(f"  {i}. Weight: {location['vehicle_weight']:.6f}, "
-                  f"Vehicles: {location['Total cars or vans']}, "
-                  f"Coords: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
+        print("=" * 50)
         
         return weighted_locations
         
     except Exception as e:
-        print(f"Error in vehicle weighting analysis: {e}")
+        print(f"Error in vehicle weighting process: {e}")
         return None
 
 
-def perform_kmeans_clustering(existing_chargers, n_clusters=None):
+# Additional functions for clustering and optimization (keeping existing functionality)
+def perform_kmeans_clustering(weighted_locations, n_clusters=20, random_state=42):
     """
-    Perform K-means clustering on existing EV charger locations.
+    Perform K-means clustering on weighted EV locations.
     
     Arguments:
-        existing_chargers (gpd.GeoDataFrame): Existing EV charger locations
-        n_clusters (int): Number of clusters (if None, uses elbow method)
+        weighted_locations (gpd.GeoDataFrame): Locations with vehicle weights
+        n_clusters (int): Number of clusters
+        random_state (int): Random state for reproducibility
     
     Returns:
-        tuple: (kmeans_model, coordinates, optimal_k)
+        gpd.GeoDataFrame: Cluster centers with weights
     """
     try:
-        # Extract coordinates
-        coordinates = extract_coordinates(existing_chargers)
+        from sklearn.cluster import KMeans
         
-        if coordinates is None:
-            return None, None, None
-        
-        # Determine optimal number of clusters if not specified
-        if n_clusters is None:
-            n_clusters = determine_optimal_clusters(coordinates)
-        
-        # Standardize coordinates for better clustering
-        scaler = StandardScaler()
-        coordinates_scaled = scaler.fit_transform(coordinates)
+        # Extract coordinates for clustering
+        coordinates = np.column_stack((
+            weighted_locations.geometry.x,
+            weighted_locations.geometry.y
+        ))
         
         # Perform K-means clustering
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        cluster_labels = kmeans.fit_predict(coordinates_scaled)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
+        cluster_labels = kmeans.fit_predict(coordinates)
         
-        # Transform cluster centers back to original scale
-        cluster_centers = scaler.inverse_transform(kmeans.cluster_centers_)
+        # Add cluster labels to the data
+        weighted_locations = weighted_locations.copy()
+        weighted_locations['cluster'] = cluster_labels
         
-        print(f"Performed K-means clustering with {n_clusters} clusters")
-        print(f"Cluster centers: {cluster_centers}")
+        # Calculate cluster centers with average weights
+        cluster_centers = []
         
-        return kmeans, coordinates, n_clusters, cluster_centers, scaler
+        for cluster_id in range(n_clusters):
+            cluster_points = weighted_locations[weighted_locations['cluster'] == cluster_id]
+            
+            if len(cluster_points) > 0:
+                center_x = cluster_points.geometry.x.mean()
+                center_y = cluster_points.geometry.y.mean()
+                avg_weight = cluster_points['vehicle_weight'].mean()
+                avg_vehicles = cluster_points['2025 Q1'].mean()
+                point_count = len(cluster_points)
+                
+                cluster_centers.append({
+                    'cluster_id': cluster_id,
+                    'geometry': Point(center_x, center_y),
+                    'longitude': center_x,
+                    'latitude': center_y,
+                    'avg_vehicle_weight': avg_weight,
+                    'avg_vehicle_count': avg_vehicles,
+                    'points_in_cluster': point_count
+                })
+        
+        # Create GeoDataFrame of cluster centers
+        centers_gdf = gpd.GeoDataFrame(cluster_centers, crs=weighted_locations.crs)
+        
+        print(f"Created {len(centers_gdf)} cluster centers from {len(weighted_locations)} locations")
+        
+        return centers_gdf
         
     except Exception as e:
         print(f"Error performing K-means clustering: {e}")
-        return None, None, None, None, None
+        return None
 
 
-def determine_optimal_clusters(coordinates, max_clusters=10):
+def determine_optimal_clusters(weighted_locations, max_clusters=30):
     """
     Determine optimal number of clusters using elbow method.
     
     Arguments:
-        coordinates (np.array): Array of coordinates
+        weighted_locations (gpd.GeoDataFrame): Locations with vehicle weights
         max_clusters (int): Maximum number of clusters to test
     
     Returns:
         int: Optimal number of clusters
     """
     try:
-        # Limit max clusters to reasonable number based on data size
-        max_clusters = min(max_clusters, len(coordinates) // 2, 10)
+        from sklearn.cluster import KMeans
         
-        if max_clusters < 2:
-            return 2
-        
-        scaler = StandardScaler()
-        coordinates_scaled = scaler.fit_transform(coordinates)
+        coordinates = np.column_stack((
+            weighted_locations.geometry.x,
+            weighted_locations.geometry.y
+        ))
         
         inertias = []
-        k_range = range(2, max_clusters + 1)
+        cluster_range = range(1, min(max_clusters + 1, len(weighted_locations)))
         
-        for k in k_range:
-            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-            kmeans.fit(coordinates_scaled)
+        for n_clusters in cluster_range:
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+            kmeans.fit(coordinates)
             inertias.append(kmeans.inertia_)
         
-        # Simple elbow detection (find the point with maximum reduction in inertia)
-        if len(inertias) > 1:
-            differences = [inertias[i] - inertias[i+1] for i in range(len(inertias)-1)]
-            optimal_k = k_range[np.argmax(differences)]
+        # Simple elbow detection (could be improved with more sophisticated methods)
+        if len(inertias) >= 3:
+            # Calculate the rate of change
+            changes = [inertias[i-1] - inertias[i] for i in range(1, len(inertias))]
+            # Find the point where the rate of change starts to level off
+            optimal_clusters = changes.index(max(changes[:len(changes)//2])) + 2
         else:
-            optimal_k = 2
+            optimal_clusters = min(10, len(weighted_locations) // 2)
         
-        print(f"Optimal number of clusters determined: {optimal_k}")
-        return optimal_k
+        print(f"Determined optimal number of clusters: {optimal_clusters}")
+        
+        return optimal_clusters
         
     except Exception as e:
         print(f"Error determining optimal clusters: {e}")
-        return 3  # Default fallback
+        return min(20, len(weighted_locations) // 2)
 
 
-def select_optimal_locations(suitable_locations_weighted, cluster_centers, n_locations_per_cluster=1):
+def select_optimal_locations(weighted_locations, num_locations=50, method='highest_weight'):
     """
-    Select optimal locations from suitable sites based on cluster centers and vehicle weights.
+    Select optimal EV charger locations using different selection methods.
     
     Arguments:
-        suitable_locations_weighted (gpd.GeoDataFrame): Suitable locations with vehicle weights
-        cluster_centers (np.array): K-means cluster centers
-        n_locations_per_cluster (int): Number of locations to select per cluster
+        weighted_locations (gpd.GeoDataFrame): Locations with vehicle weights
+        num_locations (int): Number of locations to select
+        method (str): Selection method ('highest_weight', 'clustering', 'distributed')
     
     Returns:
         gpd.GeoDataFrame: Selected optimal locations
     """
     try:
-        # Extract coordinates from suitable locations
-        suitable_coords = extract_coordinates(suitable_locations_weighted)
+        print(f"Selecting {num_locations} optimal locations using '{method}' method...")
         
-        if suitable_coords is None:
-            return None
-        
-        selected_indices = []
-        
-        for i, center in enumerate(cluster_centers):
-            print(f"\nProcessing cluster {i+1} centered at [{center[0]:.6f}, {center[1]:.6f}]:")
+        if method == 'highest_weight':
+            # Select locations with highest vehicle weights
+            selected = weighted_locations.nlargest(num_locations, 'vehicle_weight')
             
-            # Calculate distances from cluster center to all suitable locations
-            distances = cdist([center], suitable_coords, metric='euclidean')[0]
+        elif method == 'clustering':
+            # Use clustering to select representative locations
+            optimal_clusters = min(num_locations, determine_optimal_clusters(weighted_locations))
+            cluster_centers = perform_kmeans_clustering(weighted_locations, n_clusters=optimal_clusters)
             
-            # Create a composite score: lower distance + higher vehicle weight
-            # Normalize distances to 0-1 scale
-            if len(distances) > 1:
-                normalized_distances = (distances - distances.min()) / (distances.max() - distances.min())
-            else:
-                normalized_distances = distances
-            
-            # Composite score: prioritize locations closer to cluster center and with higher vehicle counts
-            # Higher vehicle_weight and lower distance = higher score
-            composite_scores = (
-                suitable_locations_weighted['vehicle_weight'].values - 
-                normalized_distances
-            )
-            
-            # Select top N locations for this cluster
-            top_indices = np.argsort(composite_scores)[::-1][:n_locations_per_cluster]
-            
-            for idx in top_indices:
-                selected_indices.append(idx)
-                location_info = suitable_locations_weighted.iloc[idx]
+            if cluster_centers is not None:
+                # Select actual points closest to cluster centers
+                selected_indices = []
                 
-                print(f"  Selected location {len(selected_indices)}:")
-                print(f"    Coordinates: [{suitable_coords[idx][0]:.6f}, {suitable_coords[idx][1]:.6f}]")
-                print(f"    Distance to cluster center: {distances[idx]:.6f}")
-                print(f"    Vehicle count: {location_info['Total cars or vans']}")
-                print(f"    Vehicle weight: {location_info['vehicle_weight']:.3f}")
-                print(f"    Composite score: {composite_scores[idx]:.3f}")
-        
-        if selected_indices:
-            # Create a new GeoDataFrame from selected rows
-            selected_data = suitable_locations_weighted.iloc[selected_indices].copy()
-            selected_data.reset_index(drop=True, inplace=True)
+                for _, center in cluster_centers.iterrows():
+                    center_point = center.geometry
+                    # Find closest actual location to this cluster center
+                    distances = weighted_locations.geometry.distance(center_point)
+                    closest_idx = distances.idxmin()
+                    
+                    if closest_idx not in selected_indices:
+                        selected_indices.append(closest_idx)
+                
+                selected = weighted_locations.loc[selected_indices]
+            else:
+                # Fallback to highest weight method
+                selected = weighted_locations.nlargest(num_locations, 'vehicle_weight')
+                
+        elif method == 'distributed':
+            # Distribute selections across weight quartiles
+            q1 = weighted_locations['vehicle_weight'].quantile(0.25)
+            q2 = weighted_locations['vehicle_weight'].quantile(0.50)
+            q3 = weighted_locations['vehicle_weight'].quantile(0.75)
             
-            # Extract coordinates for the selected locations
-            selected_coords = suitable_coords[selected_indices]
+            # Select proportionally from each quartile
+            high_weight = weighted_locations[weighted_locations['vehicle_weight'] >= q3]
+            med_weight = weighted_locations[(weighted_locations['vehicle_weight'] >= q2) & 
+                                         (weighted_locations['vehicle_weight'] < q3)]
+            low_weight = weighted_locations[weighted_locations['vehicle_weight'] < q2]
             
-            # Create fresh Point geometries to ensure they're valid
-            new_geometries = [Point(coord[0], coord[1]) for coord in selected_coords]
+            # Proportional selection: 50% high, 30% medium, 20% low
+            n_high = int(num_locations * 0.5)
+            n_med = int(num_locations * 0.3)
+            n_low = num_locations - n_high - n_med
             
-            # Add explicit latitude and longitude columns
-            selected_data['longitude'] = selected_coords[:, 0]
-            selected_data['latitude'] = selected_coords[:, 1]
+            selected_parts = []
+            if len(high_weight) > 0:
+                selected_parts.append(high_weight.sample(n=min(n_high, len(high_weight)), random_state=42))
+            if len(med_weight) > 0:
+                selected_parts.append(med_weight.sample(n=min(n_med, len(med_weight)), random_state=42))
+            if len(low_weight) > 0:
+                selected_parts.append(low_weight.sample(n=min(n_low, len(low_weight)), random_state=42))
             
-            # Create a new GeoDataFrame with fresh geometries
-            selected_gdf = gpd.GeoDataFrame(
-                selected_data.drop('geometry', axis=1, errors='ignore'),
-                geometry=new_geometries,
-                crs='EPSG:4326'
-            )
+            selected = pd.concat(selected_parts, ignore_index=True) if selected_parts else weighted_locations.head(num_locations)
             
-            print(f"\nCreated optimized GeoDataFrame with {len(selected_gdf)} locations")
-            print(f"Columns: {list(selected_gdf.columns)}")
-            print(f"CRS: {selected_gdf.crs}")
-            
-            # Verify geometries are valid
-            for i, geom in enumerate(selected_gdf.geometry):
-                if not geom.is_valid:
-                    print(f"Warning: Invalid geometry at index {i}")
-                else:
-                    print(f"Location {i+1}: {geom.x:.6f}, {geom.y:.6f}")
-            
-            return selected_gdf
         else:
-            return None
-            
+            # Default to highest weight
+            selected = weighted_locations.nlargest(num_locations, 'vehicle_weight')
+        
+        print(f"Selected {len(selected)} optimal locations")
+        print(f"Weight range of selected locations: {selected['vehicle_weight'].min():.3f} to {selected['vehicle_weight'].max():.3f}")
+        print(f"Average weight of selected locations: {selected['vehicle_weight'].mean():.3f}")
+        
+        return selected
+        
     except Exception as e:
         print(f"Error selecting optimal locations: {e}")
-        return None
+        return weighted_locations.head(num_locations)
 
 
-def optimize_ev_charger_locations(existing_chargers_file, suitable_locations_file, vehicle_data_file, 
-                                  n_clusters=None, n_locations_per_cluster=1):
+def optimize_ev_charger_locations(weighted_locations_file, output_dir="output", 
+                                num_locations=50, optimization_method='highest_weight'):
     """
-    Main optimization function for selecting optimal EV charger locations.
+    Complete optimization pipeline for EV charger locations.
     
     Arguments:
-        existing_chargers_file (str): Path to existing EV chargers file
-        suitable_locations_file (str): Path to suitable locations file
-        vehicle_data_file (str): Path to vehicle count data file
-        n_clusters (int): Number of clusters (if None, uses elbow method)
-        n_locations_per_cluster (int): Number of locations to select per cluster
+        weighted_locations_file (str): Path to vehicle weighted locations file
+        output_dir (str): Output directory
+        num_locations (int): Number of optimal locations to select
+        optimization_method (str): Optimization method to use
     
     Returns:
-        dict: Optimization results including selected locations and analysis data
+        dict: Optimization results
     """
-    print("Starting EV charger location optimization...")
-    print("=" * 60)
-    
     try:
-        # Load data
-        print("1. Loading data...")
-        existing_chargers = gpd.read_file(existing_chargers_file)
-        suitable_locations = gpd.read_file(suitable_locations_file)
-        vehicle_data = gpd.read_file(vehicle_data_file)
+        print("Starting EV charger location optimization...")
+        print("=" * 60)
         
-        # Ensure all data has CRS
-        if existing_chargers.crs is None:
-            existing_chargers.set_crs('EPSG:4326', inplace=True)
-        if suitable_locations.crs is None:
-            suitable_locations.set_crs('EPSG:4326', inplace=True)
-        if vehicle_data.crs is None:
-            vehicle_data.set_crs('EPSG:4326', inplace=True)
-        
-        # Calculate vehicle counts if not already done
-        if 'Total cars or vans' not in vehicle_data.columns:
-            vehicle_data['Total cars or vans'] = (
-                vehicle_data['1 car or van in household'] +
-                vehicle_data['2 cars or vans in household'] * 2 +
-                vehicle_data['3 or more cars or vans in household'] * 3
-            )
-        
-        print(f"   Loaded {len(existing_chargers)} existing chargers")
-        print(f"   Loaded {len(suitable_locations)} suitable locations")
-        print(f"   Loaded {len(vehicle_data)} vehicle data areas")
-        
-        # Assign vehicle weights to suitable locations
-        print("\n2. Assigning vehicle count weights...")
-        suitable_locations_weighted = assign_vehicle_weights(suitable_locations, vehicle_data)
-        
-        if suitable_locations_weighted is None:
-            return None
-        
-        # Perform K-means clustering on existing chargers
-        print("\n3. Performing K-means clustering on existing chargers...")
-        kmeans, coordinates, n_clusters, cluster_centers, scaler = perform_kmeans_clustering(
-            existing_chargers, n_clusters
-        )
-        
-        if kmeans is None:
-            return None
+        # Load weighted locations
+        print(f"Loading weighted locations from: {weighted_locations_file}")
+        weighted_locations = gpd.read_file(weighted_locations_file)
+        print(f"Loaded {len(weighted_locations)} weighted locations")
         
         # Select optimal locations
-        print(f"\n4. Selecting {n_locations_per_cluster} optimal location(s) per cluster...")
-        selected_locations = select_optimal_locations(
-            suitable_locations_weighted, cluster_centers, n_locations_per_cluster
+        optimal_locations = select_optimal_locations(
+            weighted_locations, 
+            num_locations=num_locations, 
+            method=optimization_method
         )
         
-        if selected_locations is None:
+        if optimal_locations is None:
             return None
         
-        # Compile results
+        # Create cluster analysis
+        print("\nPerforming clustering analysis...")
+        cluster_centers = perform_kmeans_clustering(optimal_locations, n_clusters=min(20, len(optimal_locations)))
+        
+        # Prepare results
         results = {
-            'selected_locations': selected_locations,
+            'optimal_locations': optimal_locations,
             'cluster_centers': cluster_centers,
-            'n_clusters': n_clusters,
-            'existing_chargers': existing_chargers,
-            'suitable_locations_weighted': suitable_locations_weighted,
-            'optimization_summary': {
-                'total_existing_chargers': len(existing_chargers),
-                'total_suitable_locations': len(suitable_locations),
-                'total_selected_locations': len(selected_locations),
-                'n_clusters': n_clusters,
-                'locations_per_cluster': n_locations_per_cluster
+            'weighted_locations': weighted_locations,
+            'summary': {
+                'total_locations_analyzed': len(weighted_locations),
+                'optimal_locations_selected': len(optimal_locations),
+                'optimization_method': optimization_method,
+                'avg_vehicle_weight': optimal_locations['vehicle_weight'].mean(),
+                'total_vehicle_coverage': optimal_locations['2025 Q1'].sum()
             }
         }
         
-        print("\n" + "=" * 60)
+        print("=" * 60)
         print("OPTIMIZATION COMPLETE")
         print("=" * 60)
         print(f"Results:")
-        print(f"- Number of clusters: {n_clusters}")
-        print(f"- Locations selected per cluster: {n_locations_per_cluster}")
-        print(f"- Total optimal locations selected: {len(selected_locations)}")
-        print(f"- Average vehicle count at selected locations: {selected_locations['Total cars or vans'].mean():.0f}")
-        print(f"- Total vehicle count coverage: {selected_locations['Total cars or vans'].sum()}")
+        print(f"- Total locations analyzed: {results['summary']['total_locations_analyzed']}")
+        print(f"- Optimal locations selected: {results['summary']['optimal_locations_selected']}")
+        print(f"- Optimization method: {optimization_method}")
+        print(f"- Average vehicle weight: {results['summary']['avg_vehicle_weight']:.3f}")
+        print(f"- Total vehicle coverage: {results['summary']['total_vehicle_coverage']:,.0f}")
         
         return results
         
     except Exception as e:
-        print(f"Error in optimization: {e}")
+        print(f"Error in optimization process: {e}")
         return None
 
 
@@ -523,121 +442,102 @@ def save_optimization_results(results, output_dir="output"):
     Save optimization results to files.
     
     Arguments:
-        results (dict): Optimization results
-        output_dir (str): Output directory path
+        results (dict): Results from optimize_ev_charger_locations
+        output_dir (str): Output directory
     """
     try:
-        import os
         os.makedirs(output_dir, exist_ok=True)
         
-        # Get selected locations
-        selected_locations = results['selected_locations'].copy()
+        # Save optimal locations
+        if results['optimal_locations'] is not None:
+            optimal_file = os.path.join(output_dir, "optimal_ev_locations.gpkg")
+            results['optimal_locations'].to_file(optimal_file, driver='GPKG')
+            
+            # Also save as CSV
+            csv_file = os.path.join(output_dir, "optimal_ev_locations.csv")
+            csv_data = results['optimal_locations'].drop(columns=['geometry'])
+            csv_data.to_csv(csv_file, index=False)
+            
+            print(f"Saved optimal locations to: {optimal_file}")
+            print(f"Saved optimal locations CSV to: {csv_file}")
         
-        # Verify the GeoDataFrame before saving
-        print(f"Preparing to save {len(selected_locations)} optimal locations")
-        print(f"CRS: {selected_locations.crs}")
-        print(f"Geometry column type: {type(selected_locations.geometry.iloc[0])}")
+        # Save cluster centers
+        if results['cluster_centers'] is not None:
+            cluster_file = os.path.join(output_dir, "cluster_centers.gpkg")
+            results['cluster_centers'].to_file(cluster_file, driver='GPKG')
+            print(f"Saved cluster centers to: {cluster_file}")
         
-        # Ensure all geometries are valid Points
-        for i, geom in enumerate(selected_locations.geometry):
-            if not isinstance(geom, Point):
-                print(f"Warning: Geometry at index {i} is not a Point: {type(geom)}")
-            if not geom.is_valid:
-                print(f"Warning: Invalid geometry at index {i}")
+        # Save summary
+        summary_file = os.path.join(output_dir, "optimization_summary.csv")
+        summary_df = pd.DataFrame([results['summary']])
+        summary_df.to_csv(summary_file, index=False)
+        print(f"Saved optimization summary to: {summary_file}")
         
-        # Save the main optimal locations file
-        selected_locations.to_file(
-            os.path.join(output_dir, "optimal_ev_locations.gpkg"), 
-            driver='GPKG'
-        )
-        
-        # Also save as a simple CSV with coordinates for backup
-        csv_data = selected_locations.copy()
-        csv_data = csv_data.drop('geometry', axis=1)
-        csv_data.to_csv(
-            os.path.join(output_dir, "optimal_ev_locations.csv"), 
-            index=False
-        )
-        
-        # Save cluster centers as points
-        cluster_centers_gdf = gpd.GeoDataFrame(
-            {'cluster_id': range(len(results['cluster_centers']))},
-            geometry=[Point(center[0], center[1]) for center in results['cluster_centers']],
-            crs='EPSG:4326'
-        )
-        cluster_centers_gdf['longitude'] = [center[0] for center in results['cluster_centers']]
-        cluster_centers_gdf['latitude'] = [center[1] for center in results['cluster_centers']]
-        
-        cluster_centers_gdf.to_file(
-            os.path.join(output_dir, "cluster_centers.gpkg"), 
-            driver='GPKG'
-        )
-        
-        # Save optimization summary
-        summary_df = pd.DataFrame([results['optimization_summary']])
-        summary_df.to_csv(
-            os.path.join(output_dir, "optimization_summary.csv"), 
-            index=False
-        )
-        
-        print(f"Optimization results saved to {output_dir}/ directory")
-        print(f"Files created:")
-        print(f"  - optimal_ev_locations.gpkg (main geospatial file)")
-        print(f"  - optimal_ev_locations.csv (coordinate backup)")
-        print(f"  - cluster_centers.gpkg")
-        print(f"  - optimization_summary.csv")
+        print("All optimization results saved successfully!")
         
     except Exception as e:
         print(f"Error saving optimization results: {e}")
-        import traceback
-        traceback.print_exc()
 
 
 def visualize_optimization_results(results, output_dir="output"):
     """
-    Create visualization of optimization results.
+    Create visualizations of optimization results.
     
     Arguments:
-        results (dict): Optimization results
-        output_dir (str): Output directory path
+        results (dict): Results from optimize_ev_charger_locations
+        output_dir (str): Output directory
     """
     try:
-        import os
-        os.makedirs(output_dir, exist_ok=True)
+        import matplotlib.pyplot as plt
         
-        fig, ax = plt.subplots(1, 1, figsize=(12, 10))
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 10))
         
-        # Plot existing chargers
-        existing_coords = extract_coordinates(results['existing_chargers'])
-        ax.scatter(existing_coords[:, 0], existing_coords[:, 1], 
-                  c='red', marker='x', s=100, label='Existing Chargers', alpha=0.7)
+        # Plot 1: All weighted locations vs optimal selections
+        weighted_locs = results['weighted_locations']
+        optimal_locs = results['optimal_locations']
         
-        # Plot cluster centers
-        cluster_centers = results['cluster_centers']
-        ax.scatter(cluster_centers[:, 0], cluster_centers[:, 1], 
-                  c='blue', marker='*', s=200, label='Cluster Centers', alpha=0.8)
+        # Plot all locations
+        weighted_locs.plot(ax=ax1, c='lightblue', markersize=1, alpha=0.6, label='All Locations')
+        # Plot optimal locations
+        optimal_locs.plot(ax=ax1, c='red', markersize=20, alpha=0.8, label='Optimal Locations')
         
-        # Plot selected optimal locations
-        selected_coords = extract_coordinates(results['selected_locations'])
-        ax.scatter(selected_coords[:, 0], selected_coords[:, 1], 
-                  c='green', marker='o', s=150, label='Selected Locations', alpha=0.8)
+        ax1.set_title('Optimal EV Charger Locations Selection')
+        ax1.legend()
+        ax1.set_xlabel('Longitude')
+        ax1.set_ylabel('Latitude')
         
-        # Plot suitable locations (background)
-        suitable_coords = extract_coordinates(results['suitable_locations_weighted'])
-        ax.scatter(suitable_coords[:, 0], suitable_coords[:, 1], 
-                  c='lightgray', marker='.', s=20, label='Suitable Locations', alpha=0.3)
+        # Plot 2: Weight distribution
+        ax2.hist(weighted_locs['vehicle_weight'], bins=50, alpha=0.7, color='lightblue', 
+                label='All Locations', density=True)
+        ax2.hist(optimal_locs['vehicle_weight'], bins=20, alpha=0.8, color='red', 
+                label='Optimal Locations', density=True)
         
-        ax.set_xlabel('Longitude')
-        ax.set_ylabel('Latitude')
-        ax.set_title('EV Charger Location Optimization Results')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+        ax2.set_title('Vehicle Weight Distribution')
+        ax2.set_xlabel('Vehicle Weight')
+        ax2.set_ylabel('Density')
+        ax2.legend()
         
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, "optimization_visualization.png"), dpi=300, bbox_inches='tight')
+        
+        # Save visualization
+        viz_file = os.path.join(output_dir, "optimization_visualization.png")
+        plt.savefig(viz_file, dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"Visualization saved to {output_dir}/optimization_visualization.png")
+        print(f"Saved optimization visualization to: {viz_file}")
         
     except Exception as e:
-        print(f"Error creating visualization: {e}")
+        print(f"Error creating optimization visualization: {e}")
+
+
+if __name__ == "__main__":
+    # Example usage
+    suitable_locations_file = "../output/suitable_ev_point_locations.gpkg"
+    vehicle_data_file = "../Data/wcr_Total_Cars_2011_LSOA.gpkg"
+    output_dir = "../output"
+    
+    # Process vehicle weights
+    results = process_vehicle_weights(suitable_locations_file, vehicle_data_file, output_dir)
+    
+    if results is not None:
+        print("Vehicle weighting completed successfully!")
