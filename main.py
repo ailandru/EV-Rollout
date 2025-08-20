@@ -3,7 +3,7 @@ import os
 from constant.find_ev_chargers import print_ev_charger_locations
 from constant.pavement_suitability_ev import filter_suitable_pavements
 from constant.suitable_road_width import print_suitable_road_widths
-from constant.vehicle_count import analyse_vehicle_count, get_vehicle_count_summary
+from constant.vehicle_count import process_total_vehicles_data, analyse_vehicle_count, get_vehicle_count_summary
 from geospatial_processing import analyze_ev_charger_suitability, save_results
 from Optimal_Locations.building_density_weights import process_building_density_weights
 from Optimal_Locations.vehicle_weights import process_vehicle_weights
@@ -18,11 +18,30 @@ if __name__ == "__main__":
     ev_charger_file = os.path.join(data_dir, "wcr_ev_charge.gpkg")
     pavement_file = os.path.join(data_dir, "wcr_4.8.2_pavement_suitability.gpkg")
     highway_file = os.path.join(data_dir, "wcr_Highways_Roads_Area.gpkg")
-    vehicle_file = os.path.join(data_dir, "wcr_vehicles_LSOA.gpkg")
     buildings_file = os.path.join(data_dir, "wcr_2.14_buildings.gpkg")
+    
+    # NEW: Updated vehicle file path to use the processed data
+    vehicle_file = os.path.join(data_dir, "wcr_Total_Cars_2011_LSOA.gpkg")
+
+    # STEP 0: Process vehicle data first if it doesn't exist
+    print("=" * 60)
+    print("PROCESSING VEHICLE DATA")
+    print("=" * 60)
+    
+    if not os.path.exists(vehicle_file):
+        print("Processing Total_Vehicles.csv data...")
+        vehicle_processing_result = process_total_vehicles_data()
+        if vehicle_processing_result is None:
+            print("ERROR: Vehicle data processing failed. Cannot continue.")
+            exit(1)
+        print("Vehicle data processing completed successfully!")
+    else:
+        print(f"Vehicle data file already exists: {vehicle_file}")
 
     # Run the comprehensive geospatial analysis
-    print("Running comprehensive EV charger suitability analysis...")
+    print("\n" + "=" * 60)
+    print("RUNNING EV CHARGER SUITABILITY ANALYSIS")
+    print("=" * 60)
     results = analyze_ev_charger_suitability(
         ev_charger_file=ev_charger_file,
         highway_file=highway_file,
@@ -114,11 +133,12 @@ if __name__ == "__main__":
         else:
             print("No suitable point locations found for building density weighting")
 
-        # Run vehicle weighting analysis
+        # Run vehicle weighting analysis with NEW data
         vehicle_weight_results = None
         if len(final_suitable_points) > 0:
             print("\n" + "="*60)
             print("RUNNING VEHICLE WEIGHTING ANALYSIS")
+            print("Using NEW Total Vehicles data with '2025 Q1' column")
             print("Using min-max normalization (0-1 scale)")
             print("="*60)
             
@@ -127,10 +147,10 @@ if __name__ == "__main__":
             
             # Check if the suitable locations file exists before running vehicle weighting
             if os.path.exists(suitable_locations_file):
-                # Run vehicle weighting analysis with min-max normalization
+                # Run vehicle weighting analysis with min-max normalization using NEW vehicle data
                 vehicle_weight_results = process_vehicle_weights(
                     suitable_ev_locations_file=suitable_locations_file,
-                    vehicle_data_file=vehicle_file,
+                    vehicle_data_file=vehicle_file,  # NEW: Using wcr_Total_Cars_2011_LSOA.gpkg
                     output_dir=output_dir
                 )
                 
@@ -139,12 +159,12 @@ if __name__ == "__main__":
                     
                     # Display detailed statistics about the vehicle weighted results
                     vehicle_weights = vehicle_weight_results['vehicle_weight']
-                    vehicle_counts = vehicle_weight_results['Total cars or vans']
+                    vehicle_counts = vehicle_weight_results['2025 Q1']  # NEW: Using 2025 Q1 column
                     
                     print(f"\nVehicle Weight Summary:")
                     print(f"- Total locations processed: {len(vehicle_weight_results)}")
                     print(f"- Geometry type: {vehicle_weight_results.geometry.iloc[0].geom_type}")
-                    print(f"\nVehicle Count Statistics:")
+                    print(f"\nVehicle Count Statistics (2025 Q1 Total Vehicles Data):")
                     print(f"- Vehicle count range: {vehicle_counts.min()} to {vehicle_counts.max()}")
                     print(f"- Average vehicle count: {vehicle_counts.mean():.1f}")
                     print(f"- Median vehicle count: {vehicle_counts.median():.1f}")
@@ -159,7 +179,7 @@ if __name__ == "__main__":
                     top_vehicle_locations = vehicle_weight_results.nlargest(5, 'vehicle_weight')
                     for i, (idx, location) in enumerate(top_vehicle_locations.iterrows(), 1):
                         print(f"  {i}. Weight: {location['vehicle_weight']:.6f}, "
-                              f"Vehicles: {location['Total cars or vans']}, "
+                              f"Total Vehicles (2025 Q1): {location['2025 Q1']}, "
                               f"Coords: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
                 else:
                     print("Vehicle weighting analysis failed")
@@ -168,7 +188,7 @@ if __name__ == "__main__":
         else:
             print("No suitable point locations found for vehicle weighting")
 
-        # NEW: Run combined weighting analysis
+        # Run combined weighting analysis
         if (building_weight_results is not None and vehicle_weight_results is not None):
             print("\n" + "="*60)
             print("RUNNING COMBINED WEIGHTING ANALYSIS")
@@ -209,7 +229,7 @@ if __name__ == "__main__":
                         print(f"     Building Weight: {location['building_density_weight']:.3f}, "
                               f"Vehicle Weight: {location['vehicle_weight']:.3f}")
                         print(f"     Buildings: {location['buildings_within_radius']}, "
-                              f"Vehicles: {location['total_cars_or_vans']}")
+                              f"Total Vehicles (2025 Q1): {location.get('total_vehicles', location.get('2025 Q1', 'N/A'))}")
                         print(f"     Coords: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
                 else:
                     print("Combined weighting analysis failed")
@@ -223,17 +243,19 @@ if __name__ == "__main__":
     else:
         print("Geospatial analysis failed - cannot proceed with weighting analyses")
 
-    # Get vehicle count data for reference
+    # Get vehicle count data for reference using NEW data
     print("\n" + "="*60)
-    print("VEHICLE COUNT ANALYSIS")
+    print("VEHICLE COUNT ANALYSIS (NEW TOTAL VEHICLES DATA)")
     print("="*60)
     
     vehicle_summary = get_vehicle_count_summary(vehicle_file)
     
     if vehicle_summary is not None:
-        print(f"\nVehicle Count Summary:")
+        print(f"\nVehicle Count Summary (2025 Q1 Total Vehicles Data):")
         print(f"- Total areas analyzed: {vehicle_summary['total_areas']}")
         print(f"- Total vehicles across all areas: {vehicle_summary['total_vehicles']:,}")
         print(f"- Average vehicles per area: {vehicle_summary['average_vehicles_per_area']:.2f}")
         print(f"- Maximum vehicles in an area: {vehicle_summary['max_vehicles_in_area']:,}")
         print(f"- Minimum vehicles in an area: {vehicle_summary['min_vehicles_in_area']:,}")
+    else:
+        print("Vehicle count analysis failed - check if wcr_Total_Cars_2011_LSOA.gpkg exists")
