@@ -1,336 +1,594 @@
-"""
-Combine building density weights and vehicle weights for EV charger location optimization.
-This module handles the integration of both weighting systems to create final combined scores.
-"""
-
+"""Combine building density and vehicle count weights for optimal EV charger location analysis."""
+import os
 import geopandas as gpd
 import pandas as pd
 import numpy as np
-import os
-from typing import Optional, Tuple
+from shapely.geometry import Point  # Add this import at the top
 
-
-def load_weighted_data(buildings_weighted_file: str, vehicle_weighted_file: str) -> Tuple[Optional[gpd.GeoDataFrame], Optional[gpd.GeoDataFrame]]:
+def load_weighted_data(buildings_weighted_file, vehicle_weighted_file):
     """
-    Load both building and vehicle weighted datasets.
+    Load and validate weighted data files.
     
     Arguments:
-        buildings_weighted_file (str): Path to buildings_weighted_ev_locations.gpkg
-        vehicle_weighted_file (str): Path to vehicle_weights_ev_locations.gpkg
+        buildings_weighted_file (str): Path to buildings weighted locations file
+        vehicle_weighted_file (str): Path to vehicle weighted locations file
     
     Returns:
-        Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]: Both datasets or (None, None) if failed
+        tuple: (buildings_gdf, vehicle_gdf) or (None, None) if error
     """
     try:
-        print(f"Loading building weighted data from: {buildings_weighted_file}")
-        building_weighted = gpd.read_file(buildings_weighted_file)
-        print(f"Loaded {len(building_weighted)} building weighted locations")
+        print("Loading weighted data files...")
         
-        print(f"Loading vehicle weighted data from: {vehicle_weighted_file}")
-        vehicle_weighted = gpd.read_file(vehicle_weighted_file)
-        print(f"Loaded {len(vehicle_weighted)} vehicle weighted locations")
-        
-        # Verify required columns exist
-        required_building_cols = ['building_density_weight', 'buildings_within_radius']
-        required_vehicle_cols = ['vehicle_weight', '2025 Q1']
-        
-        missing_building = [col for col in required_building_cols if col not in building_weighted.columns]
-        missing_vehicle = [col for col in required_vehicle_cols if col not in vehicle_weighted.columns]
-        
-        if missing_building:
-            print(f"Error: Missing columns in building data: {missing_building}")
+        # Load buildings weighted data
+        if not os.path.exists(buildings_weighted_file):
+            print(f"Error: Buildings weighted file not found: {buildings_weighted_file}")
             return None, None
+            
+        buildings_gdf = gpd.read_file(buildings_weighted_file)
+        print(f"Loaded {len(buildings_gdf)} buildings weighted locations")
         
-        if missing_vehicle:
-            print(f"Error: Missing columns in vehicle data: {missing_vehicle}")
+        # Load vehicle weighted data
+        if not os.path.exists(vehicle_weighted_file):
+            print(f"Error: Vehicle weighted file not found: {vehicle_weighted_file}")
             return None, None
+            
+        vehicle_gdf = gpd.read_file(vehicle_weighted_file)
+        print(f"Loaded {len(vehicle_gdf)} vehicle weighted locations")
         
-        print("Both datasets loaded successfully with required columns")
-        return building_weighted, vehicle_weighted
+        # Verify required columns
+        buildings_required = ['building_density_weight']
+        vehicle_required = ['vehicle_weight']
+        
+        for col in buildings_required:
+            if col not in buildings_gdf.columns:
+                print(f"Error: Required column '{col}' not found in buildings data")
+                return None, None
+                
+        for col in vehicle_required:
+            if col not in vehicle_gdf.columns:
+                print(f"Error: Required column '{col}' not found in vehicle data")
+                return None, None
+        
+        # Ensure both datasets have the same CRS
+        if buildings_gdf.crs != vehicle_gdf.crs:
+            print(f"Converting CRS: buildings {buildings_gdf.crs} -> vehicle {vehicle_gdf.crs}")
+            buildings_gdf = buildings_gdf.to_crs(vehicle_gdf.crs)
+        
+        print("Data validation successful!")
+        return buildings_gdf, vehicle_gdf
         
     except Exception as e:
-        print(f"Error loading weighted datasets: {e}")
+        print(f"Error loading weighted data: {e}")
         return None, None
 
-
-def combine_weights_by_coordinates(building_weighted: gpd.GeoDataFrame, vehicle_weighted: gpd.GeoDataFrame, tolerance: float = 1e-6) -> Optional[gpd.GeoDataFrame]:
+def combine_weights_by_coordinates(buildings_gdf, vehicle_gdf):
     """
-    Combine building and vehicle weights by matching coordinates.
+    Combine weights from building and vehicle data by matching coordinates.
     
     Arguments:
-        building_weighted (gpd.GeoDataFrame): Building weighted locations
-        vehicle_weighted (gpd.GeoDataFrame): Vehicle weighted locations
-        tolerance (float): Coordinate matching tolerance
+        buildings_gdf: GeoDataFrame with building density weights
+        vehicle_gdf: GeoDataFrame with vehicle weights
     
     Returns:
-        gpd.GeoDataFrame: Combined weighted locations or None if failed
+        GeoDataFrame: Combined weighted locations or None if error
     """
     try:
-        print("\nCombining weights by coordinate matching...")
+        print("Combining weights by coordinate matching...")
         
-        # Extract coordinates for both datasets
-        building_coords = np.column_stack((building_weighted.geometry.x, building_weighted.geometry.y))
-        vehicle_coords = np.column_stack((vehicle_weighted.geometry.x, vehicle_weighted.geometry.y))
+        # Extract coordinates from geometry
+        print("Buildings coordinates extracted:", len(buildings_gdf))
+        print("Vehicle coordinates extracted:", len(vehicle_gdf))
         
-        print(f"Building locations: {len(building_coords)}")
-        print(f"Vehicle locations: {len(vehicle_coords)}")
+        # Create coordinate matching using spatial index for efficiency
+        buildings_coords = [(geom.x, geom.y) for geom in buildings_gdf.geometry]
+        vehicle_coords = [(geom.x, geom.y) for geom in vehicle_gdf.geometry]
         
-        # Find matching coordinates within tolerance
+        # Create dictionaries for fast lookup
+        buildings_data = {}
+        for idx, (coord, row) in enumerate(zip(buildings_coords, buildings_gdf.itertuples())):
+            buildings_data[coord] = {
+                'building_density_weight': row.building_density_weight,
+                'buildings_within_radius': getattr(row, 'buildings_within_radius', 0),
+                'radius_meters': getattr(row, 'radius_meters', 200),
+                'geometry': buildings_gdf.geometry.iloc[idx]
+            }
+        
+        vehicle_data = {}
+        for idx, (coord, row) in enumerate(zip(vehicle_coords, vehicle_gdf.itertuples())):
+            vehicle_data[coord] = {
+                'vehicle_weight': row.vehicle_weight,
+                'vehicle_count': getattr(row, '2025 Q1', getattr(row, 'total_vehicles', 0)),
+                'geometry': vehicle_gdf.geometry.iloc[idx]
+            }
+        
+        # Find matches and combine data
         combined_data = []
-        matched_building = set()
-        matched_vehicle = set()
+        matched_coords = []
         
-        for i, building_coord in enumerate(building_coords):
-            # Calculate distances to all vehicle coordinates
-            distances = np.sqrt(np.sum((vehicle_coords - building_coord) ** 2, axis=1))
-            
-            # Find closest match within tolerance
-            min_distance_idx = np.argmin(distances)
-            min_distance = distances[min_distance_idx]
-            
-            if min_distance <= tolerance and min_distance_idx not in matched_vehicle:
-                # Found a match
-                building_row = building_weighted.iloc[i]
-                vehicle_row = vehicle_weighted.iloc[min_distance_idx]
+        for coord in buildings_coords:
+            if coord in vehicle_data:
+                matched_coords.append(coord)
                 
-                # Calculate combined weight (multiplication)
-                combined_weight = building_row['building_density_weight'] * vehicle_row['vehicle_weight']
-                
+                # Combine the data
                 combined_record = {
-                    'geometry': building_row.geometry,
-                    'longitude': building_row.geometry.x,
-                    'latitude': building_row.geometry.y,
-                    'building_density_weight': building_row['building_density_weight'],
-                    'buildings_within_radius': building_row['buildings_within_radius'],
-                    'radius_meters': building_row.get('radius_meters', 200),
-                    'vehicle_weight': vehicle_row['vehicle_weight'],
-                    'total_vehicles': vehicle_row['2025 Q1'],  # Changed from 'Total cars or vans' to '2025 Q1'
-                    'LSOA11CD': vehicle_row.get('LSOA11CD', 'N/A'),
-                    'combined_weight': combined_weight,
-                    'matching_distance': min_distance
+                    'geometry': buildings_data[coord]['geometry'],  # Use buildings geometry
+                    'building_density_weight': buildings_data[coord]['building_density_weight'],
+                    'buildings_within_radius': buildings_data[coord]['buildings_within_radius'],
+                    'radius_meters': buildings_data[coord]['radius_meters'],
+                    'vehicle_weight': vehicle_data[coord]['vehicle_weight'],
+                    'vehicle_count': vehicle_data[coord]['vehicle_count'],
+                    'combined_weight': buildings_data[coord]['building_density_weight'] * vehicle_data[coord]['vehicle_weight']
                 }
                 
                 combined_data.append(combined_record)
-                matched_building.add(i)
-                matched_vehicle.add(min_distance_idx)
         
-        print(f"Coordinate matching results:")
-        print(f"- Building locations matched: {len(matched_building)}")
-        print(f"- Vehicle locations matched: {len(matched_vehicle)}")
-        print(f"- Total combined locations: {len(combined_data)}")
-        print(f"- Unmatched building locations: {len(building_weighted) - len(matched_building)}")
-        print(f"- Unmatched vehicle locations: {len(vehicle_weighted) - len(matched_vehicle)}")
+        print("Coordinate matching results:")
+        print(f"- Matched pairs: {len(matched_coords)}")
+        print(f"- Unmatched buildings: {len(buildings_coords) - len(matched_coords)}")
+        print(f"- Unmatched vehicles: {len(vehicle_coords) - len(matched_coords)}")
         
         if not combined_data:
-            print("ERROR: No matching coordinates found!")
+            print("Error: No matching coordinates found between datasets")
             return None
         
-        # Create GeoDataFrame
-        combined_gdf = gpd.GeoDataFrame(combined_data, crs=building_weighted.crs)
+        # Create GeoDataFrame from combined data
+        combined_gdf = gpd.GeoDataFrame(combined_data, crs=buildings_gdf.crs)
         
-        print(f"Combined dataset created with {len(combined_gdf)} locations")
-        
+        print(f"Successfully combined {len(combined_gdf)} locations")
         return combined_gdf
         
     except Exception as e:
-        print(f"Error combining weights by coordinates: {e}")
+        print(f"Error combining weights: {e}")
         return None
 
-
-def analyze_combined_weights(combined_gdf: gpd.GeoDataFrame) -> None:
+def analyze_combined_weights(combined_gdf):
     """
-    Analyze the combined weight statistics.
+    Analyze the combined weight results and provide statistics.
     
     Arguments:
-        combined_gdf (gpd.GeoDataFrame): Combined weighted locations
+        combined_gdf: GeoDataFrame with combined weights
+    
+    Returns:
+        dict: Analysis results
     """
     try:
-        print("\n" + "="*70)
-        print("COMBINED WEIGHT ANALYSIS")
-        print("="*70)
-        
-        building_weights = combined_gdf['building_density_weight']
-        vehicle_weights = combined_gdf['vehicle_weight']
+        if combined_gdf is None or len(combined_gdf) == 0:
+            return None
+            
+        # Calculate statistics
         combined_weights = combined_gdf['combined_weight']
+        building_weights = combined_gdf['building_density_weight'] 
+        vehicle_weights = combined_gdf['vehicle_weight']
         
-        print(f"Combined Weight Statistics:")
-        print(f"- Total locations: {len(combined_gdf)}")
-        print(f"- Geometry type: {combined_gdf.geometry.iloc[0].geom_type}")
-        print(f"")
+        analysis = {
+            'total_locations': len(combined_gdf),
+            'combined_weight_stats': {
+                'min': combined_weights.min(),
+                'max': combined_weights.max(),
+                'mean': combined_weights.mean(),
+                'median': combined_weights.median(),
+                'std': combined_weights.std()
+            },
+            'building_weight_stats': {
+                'min': building_weights.min(),
+                'max': building_weights.max(),
+                'mean': building_weights.mean(),
+                'std': building_weights.std()
+            },
+            'vehicle_weight_stats': {
+                'min': vehicle_weights.min(),
+                'max': vehicle_weights.max(),
+                'mean': vehicle_weights.mean(),
+                'std': vehicle_weights.std()
+            },
+            'high_priority_locations': (combined_weights > combined_weights.quantile(0.8)).sum(),
+            'medium_priority_locations': ((combined_weights > combined_weights.quantile(0.5)) & 
+                                        (combined_weights <= combined_weights.quantile(0.8))).sum(),
+            'low_priority_locations': (combined_weights <= combined_weights.quantile(0.5)).sum()
+        }
         
-        print(f"Building Density Weights (0-1 scale):")
-        print(f"- Range: {building_weights.min():.6f} to {building_weights.max():.6f}")
-        print(f"- Average: {building_weights.mean():.3f}")
-        print(f"- Standard deviation: {building_weights.std():.3f}")
-        print(f"")
-        
-        print(f"Vehicle Weights (0-1 scale):")
-        print(f"- Range: {vehicle_weights.min():.6f} to {vehicle_weights.max():.6f}")
-        print(f"- Average: {vehicle_weights.mean():.3f}")
-        print(f"- Standard deviation: {vehicle_weights.std():.3f}")
-        print(f"")
-        
-        print(f"Combined Weights (building_weight × vehicle_weight):")
-        print(f"- Range: {combined_weights.min():.6f} to {combined_weights.max():.6f}")
-        print(f"- Average: {combined_weights.mean():.3f}")
-        print(f"- Standard deviation: {combined_weights.std():.3f}")
-        
-        # Count zero weights
-        zero_building = (building_weights == 0.0).sum()
-        zero_vehicle = (vehicle_weights == 0.0).sum()
-        zero_combined = (combined_weights == 0.0).sum()
-        
-        print(f"")
-        print(f"Zero Weight Locations:")
-        print(f"- Building weight = 0.0: {zero_building} locations")
-        print(f"- Vehicle weight = 0.0: {zero_vehicle} locations")
-        print(f"- Combined weight = 0.0: {zero_combined} locations")
-        
-        # Show weight distribution
-        print(f"\nCombined Weight Distribution:")
-        weight_bins = np.arange(0, 1.1, 0.1)
-        for i in range(len(weight_bins)-1):
-            count = ((combined_weights >= weight_bins[i]) & (combined_weights < weight_bins[i+1])).sum()
-            if i == len(weight_bins)-2:  # Last bin includes 1.0
-                count = ((combined_weights >= weight_bins[i]) & (combined_weights <= weight_bins[i+1])).sum()
-            print(f"- Weights {weight_bins[i]:.1f}-{weight_bins[i+1]:.1f}: {count} locations")
-        
-        # Show top 10 highest combined weighted locations
-        print(f"\nTop 10 Highest Combined Weighted Locations:")
-        top_locations = combined_gdf.nlargest(10, 'combined_weight')
-        for i, (idx, location) in enumerate(top_locations.iterrows(), 1):
-            print(f"  {i:2d}. Combined: {location['combined_weight']:.6f} "
-                  f"(Building: {location['building_density_weight']:.3f} × "
-                  f"Vehicle: {location['vehicle_weight']:.3f})")
-            print(f"      Buildings: {location['buildings_within_radius']}, "
-                  f"Total Vehicles: {location['total_vehicles']}, "
-                  f"Coords: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
-        
-        # Show bottom 5 lowest combined weighted locations (excluding zeros)
-        non_zero_locations = combined_gdf[combined_gdf['combined_weight'] > 0]
-        if len(non_zero_locations) > 0:
-            print(f"\nBottom 5 Lowest Combined Weighted Locations (excluding zeros):")
-            bottom_locations = non_zero_locations.nsmallest(5, 'combined_weight')
-            for i, (idx, location) in enumerate(bottom_locations.iterrows(), 1):
-                print(f"  {i}. Combined: {location['combined_weight']:.6f} "
-                      f"(Building: {location['building_density_weight']:.3f} × "
-                      f"Vehicle: {location['vehicle_weight']:.3f})")
-                print(f"     Buildings: {location['buildings_within_radius']}, "
-                      f"Total Vehicles: {location['total_vehicles']}, "
-                      f"Coords: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
+        return analysis
         
     except Exception as e:
         print(f"Error analyzing combined weights: {e}")
+        return None
 
-
-def save_combined_results(combined_gdf: gpd.GeoDataFrame, output_dir: str = "output") -> None:
+def save_combined_results(combined_gdf, output_dir, filename):
     """
-    Save combined weighting results to files.
+    Save combined weighted results to file.
     
     Arguments:
-        combined_gdf (gpd.GeoDataFrame): Combined weighted locations
-        output_dir (str): Output directory path
+        combined_gdf: GeoDataFrame with combined weights
+        output_dir (str): Output directory
+        filename (str): Output filename
+    
+    Returns:
+        str: Path to saved file or None if error
     """
     try:
+        if combined_gdf is None:
+            return None
+            
+        # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
         
-        # Save as GPKG file
-        gpkg_file = os.path.join(output_dir, "combined_weighted_ev_locations.gpkg")
-        combined_gdf.to_file(gpkg_file, driver='GPKG')
-        print(f"Saved combined weighted locations to: {gpkg_file}")
+        # Generate output path
+        output_path = os.path.join(output_dir, filename)
         
-        # Save as CSV (without geometry)
-        csv_file = os.path.join(output_dir, "combined_weighted_ev_locations.csv")
-        csv_data = combined_gdf.drop(columns=['geometry'])
-        csv_data.to_csv(csv_file, index=False)
-        print(f"Saved combined weighted CSV to: {csv_file}")
+        # Save the results
+        combined_gdf.to_file(output_path, driver='GPKG')
         
-        # Save top 50 highest weighted locations as separate files
-        top_50 = combined_gdf.nlargest(50, 'combined_weight')
+        print(f"Combined weighted results saved to: {output_path}")
+        print(f"Total locations saved: {len(combined_gdf)}")
         
-        top_50_gpkg = os.path.join(output_dir, "top_50_combined_weighted_locations.gpkg")
-        top_50.to_file(top_50_gpkg, driver='GPKG')
-        print(f"Saved top 50 locations to: {top_50_gpkg}")
-        
-        top_50_csv = os.path.join(output_dir, "top_50_combined_weighted_locations.csv")
-        top_50_data = top_50.drop(columns=['geometry'])
-        top_50_data.to_csv(top_50_csv, index=False)
-        print(f"Saved top 50 CSV to: {top_50_csv}")
-        
-        print("All combined weighting results saved successfully!")
+        return output_path
         
     except Exception as e:
         print(f"Error saving combined results: {e}")
-
-
-def process_combined_weights(buildings_weighted_file: str, vehicle_weighted_file: str, output_dir: str = "output") -> Optional[gpd.GeoDataFrame]:
-    """
-    Main function to process combined building density and vehicle weights.
-    
-    Arguments:
-        buildings_weighted_file (str): Path to buildings_weighted_ev_locations.gpkg
-        vehicle_weighted_file (str): Path to vehicle_weights_ev_locations.gpkg
-        output_dir (str): Output directory path
-    
-    Returns:
-        gpd.GeoDataFrame: Combined weighted locations or None if failed
-    """
-    print("\n" + "="*80)
-    print("STARTING COMBINED WEIGHTING ANALYSIS")
-    print("Multiplying building_density_weight × vehicle_weight")
-    print("="*80)
-    
-    try:
-        # Load both weighted datasets
-        building_weighted, vehicle_weighted = load_weighted_data(
-            buildings_weighted_file, vehicle_weighted_file
-        )
-        
-        if building_weighted is None or vehicle_weighted is None:
-            return None
-        
-        # Combine weights by matching coordinates
-        print("\nCombining weights by coordinate matching...")
-        combined_gdf = combine_weights_by_coordinates(building_weighted, vehicle_weighted)
-        
-        if combined_gdf is None:
-            return None
-        
-        # Analyze combined weights
-        analyze_combined_weights(combined_gdf)
-        
-        # Save results
-        print(f"\nSaving combined results...")
-        save_combined_results(combined_gdf, output_dir)
-        
-        print("\n" + "="*80)
-        print("COMBINED WEIGHTING ANALYSIS COMPLETE")
-        print("="*80)
-        print(f"Final Results:")
-        print(f"- Total locations processed: {len(combined_gdf)}")
-        print(f"- Average combined weight: {combined_gdf['combined_weight'].mean():.6f}")
-        print(f"- Highest combined weight: {combined_gdf['combined_weight'].max():.6f}")
-        print(f"- Locations with combined weight > 0.5: {(combined_gdf['combined_weight'] > 0.5).sum()}")
-        print(f"- Locations with combined weight > 0.1: {(combined_gdf['combined_weight'] > 0.1).sum()}")
-        
-        return combined_gdf
-        
-    except Exception as e:
-        print(f"Error in combined weighting process: {e}")
         return None
 
-
-if __name__ == "__main__":
-    # Example usage
-    buildings_file = "../output/buildings_weighted_ev_locations.gpkg"
-    vehicle_file = "../output/vehicle_weights_ev_locations.gpkg"
-    output_directory = "../output"
+def process_combined_weights(buildings_weighted_file, vehicle_weighted_file, output_dir):
+    """
+    Process combined weighting analysis for building density and total vehicle weights.
     
-    # Process combined weights
-    results = process_combined_weights(buildings_file, vehicle_file, output_directory)
+    Arguments:
+        buildings_weighted_file (str): Path to buildings weighted locations file
+        vehicle_weighted_file (str): Path to vehicle weighted locations file  
+        output_dir (str): Output directory for results
+    
+    Returns:
+        GeoDataFrame: Combined weighted locations or None if error
+    """
+    print("\nCOMBINED WEIGHTING ANALYSIS")
+    print("=" * 60)
+    
+    # Load weighted data
+    buildings_gdf, vehicle_gdf = load_weighted_data(buildings_weighted_file, vehicle_weighted_file)
+    
+    if buildings_gdf is None or vehicle_gdf is None:
+        return None
+    
+    # Combine weights by coordinates
+    combined_gdf = combine_weights_by_coordinates(buildings_gdf, vehicle_gdf)
+    
+    if combined_gdf is None:
+        return None
+    
+    # Analyze results
+    analysis = analyze_combined_weights(combined_gdf)
+    if analysis:
+        print(f"\nCombined Weight Analysis:")
+        print(f"- Total locations: {analysis['total_locations']}")
+        print(f"- Combined weight range: {analysis['combined_weight_stats']['min']:.6f} to {analysis['combined_weight_stats']['max']:.6f}")
+        print(f"- Average combined weight: {analysis['combined_weight_stats']['mean']:.6f}")
+        print(f"- High priority locations: {analysis['high_priority_locations']}")
+    
+    # Save results
+    output_path = save_combined_results(combined_gdf, output_dir, "combined_weighted_ev_locations.gpkg")
+    
+    return combined_gdf
+
+def process_ev_combined_weights(buildings_weighted_file, ev_vehicle_weighted_file, output_dir):
+    """
+    Process combined weighting analysis for building density and EV vehicle weights.
+    
+    Arguments:
+        buildings_weighted_file (str): Path to buildings weighted locations file
+        ev_vehicle_weighted_file (str): Path to EV vehicle weighted locations file  
+        output_dir (str): Output directory for results
+    
+    Returns:
+        GeoDataFrame: EV combined weighted locations or None if error
+    """
+    print("\nEV COMBINED WEIGHTING ANALYSIS")
+    print("=" * 60)
+    
+    try:
+        # Load weighted data files
+        print("Loading weighted data files...")
+        
+        # Load buildings weighted data
+        if not os.path.exists(buildings_weighted_file):
+            print(f"Error: Buildings weighted file not found: {buildings_weighted_file}")
+            return None
+            
+        buildings_gdf = gpd.read_file(buildings_weighted_file)
+        print(f"Loaded {len(buildings_gdf)} buildings weighted locations")
+        
+        # Load EV vehicle weighted data
+        if not os.path.exists(ev_vehicle_weighted_file):
+            print(f"Error: EV vehicle weighted file not found: {ev_vehicle_weighted_file}")
+            return None
+            
+        ev_vehicle_gdf = gpd.read_file(ev_vehicle_weighted_file)
+        print(f"Loaded {len(ev_vehicle_gdf)} EV vehicle weighted locations")
+        
+        # Verify required columns
+        buildings_required = ['building_density_weight']
+        ev_vehicle_required = ['ev_vehicle_weight']
+        
+        for col in buildings_required:
+            if col not in buildings_gdf.columns:
+                print(f"Error: Required column '{col}' not found in buildings data")
+                return None
+                
+        for col in ev_vehicle_required:
+            if col not in ev_vehicle_gdf.columns:
+                print(f"Error: Required column '{col}' not found in EV vehicle data")
+                return None
+        
+        # Ensure both datasets have the same CRS
+        if buildings_gdf.crs != ev_vehicle_gdf.crs:
+            print(f"Converting CRS: buildings {buildings_gdf.crs} -> EV vehicle {ev_vehicle_gdf.crs}")
+            buildings_gdf = buildings_gdf.to_crs(ev_vehicle_gdf.crs)
+        
+        print("Data validation successful!")
+        
+        # Combine weights by coordinate matching
+        print("Combining weights by coordinate matching...")
+        
+        # Extract coordinates from geometry
+        buildings_coords = [(geom.x, geom.y) for geom in buildings_gdf.geometry]
+        ev_vehicle_coords = [(geom.x, geom.y) for geom in ev_vehicle_gdf.geometry]
+        
+        print("Buildings coordinates extracted:", len(buildings_coords))
+        print("EV vehicle coordinates extracted:", len(ev_vehicle_coords))
+        
+        # Create dictionaries for fast lookup
+        buildings_data = {}
+        for idx, (coord, row) in enumerate(zip(buildings_coords, buildings_gdf.itertuples())):
+            buildings_data[coord] = {
+                'building_density_weight': row.building_density_weight,
+                'buildings_within_radius': getattr(row, 'buildings_within_radius', 0),
+                'radius_meters': getattr(row, 'radius_meters', 200),
+                'geometry': buildings_gdf.geometry.iloc[idx]
+            }
+        
+        ev_vehicle_data = {}
+        for idx, (coord, row) in enumerate(zip(ev_vehicle_coords, ev_vehicle_gdf.itertuples())):
+            ev_vehicle_data[coord] = {
+                'ev_vehicle_weight': row.ev_vehicle_weight,
+                'ev_count_2024_q4': getattr(row, '2024 Q4', getattr(row, 'ev_count', 0)),
+                'geometry': ev_vehicle_gdf.geometry.iloc[idx]
+            }
+        
+        # Find matches and combine data
+        combined_data = []
+        matched_coords = []
+        
+        for coord in buildings_coords:
+            if coord in ev_vehicle_data:
+                matched_coords.append(coord)
+                
+                # Combine the data
+                combined_record = {
+                    'geometry': buildings_data[coord]['geometry'],  # Use buildings geometry
+                    'building_density_weight': buildings_data[coord]['building_density_weight'],
+                    'buildings_within_radius': buildings_data[coord]['buildings_within_radius'],
+                    'radius_meters': buildings_data[coord]['radius_meters'],
+                    'ev_vehicle_weight': ev_vehicle_data[coord]['ev_vehicle_weight'],
+                    'ev_count_2024_q4': ev_vehicle_data[coord]['ev_count_2024_q4'],
+                    'ev_combined_weight': buildings_data[coord]['building_density_weight'] * ev_vehicle_data[coord]['ev_vehicle_weight']
+                }
+                
+                combined_data.append(combined_record)
+        
+        print("Coordinate matching results:")
+        print(f"- Matched pairs: {len(matched_coords)}")
+        print(f"- Unmatched buildings: {len(buildings_coords) - len(matched_coords)}")
+        
+        if not combined_data:
+            print("Error: No matching coordinates found between datasets")
+            return None
+        
+        # Create GeoDataFrame from combined data
+        ev_combined_gdf = gpd.GeoDataFrame(combined_data, crs=buildings_gdf.crs)
+        
+        print(f"Successfully combined {len(ev_combined_gdf)} EV locations")
+        
+        # Analyze EV combined results
+        if len(ev_combined_gdf) > 0:
+            ev_combined_weights = ev_combined_gdf['ev_combined_weight']
+            building_weights = ev_combined_gdf['building_density_weight'] 
+            ev_vehicle_weights = ev_combined_gdf['ev_vehicle_weight']
+            
+            print(f"\nEV Combined Weight Analysis:")
+            print(f"- Total locations: {len(ev_combined_gdf)}")
+            print(f"- EV combined weight range: {ev_combined_weights.min():.6f} to {ev_combined_weights.max():.6f}")
+            print(f"- Average EV combined weight: {ev_combined_weights.mean():.6f}")
+            print(f"- High priority locations (>80th percentile): {(ev_combined_weights > ev_combined_weights.quantile(0.8)).sum()}")
+        
+        # Save EV combined results
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, "ev_combined_weighted_ev_locations.gpkg")
+        ev_combined_gdf.to_file(output_path, driver='GPKG')
+        
+        print(f"EV combined weighted results saved to: {output_path}")
+        print(f"Total EV locations saved: {len(ev_combined_gdf)}")
+        
+        return ev_combined_gdf
+        
+    except Exception as e:
+        print(f"Error in EV combined weighting: {e}")
+        return None
+
+def process_household_income_combined_weights(ev_combined_weighted_file, household_income_weighted_file, output_dir):
+    """
+    Process combined weighting analysis for EV combined weights and household income weights.
+    
+    Arguments:
+        ev_combined_weighted_file (str): Path to EV combined weighted locations file
+        household_income_weighted_file (str): Path to household income weighted locations file
+        output_dir (str): Output directory for results
+    
+    Returns:
+        GeoDataFrame: Household income combined weighted locations or None if error
+    """
+    print("\nHOUSEHOLD INCOME COMBINED WEIGHTING ANALYSIS")
+    print("=" * 60)
+    
+    try:
+        # Load weighted data files
+        print("Loading weighted data files...")
+        
+        # Load EV combined weighted data
+        if not os.path.exists(ev_combined_weighted_file):
+            print(f"Error: EV combined weighted file not found: {ev_combined_weighted_file}")
+            return None
+            
+        ev_combined_gdf = gpd.read_file(ev_combined_weighted_file)
+        print(f"Loaded {len(ev_combined_gdf)} EV combined weighted locations")
+        
+        # Load household income weighted data
+        if not os.path.exists(household_income_weighted_file):
+            print(f"Error: Household income weighted file not found: {household_income_weighted_file}")
+            return None
+            
+        household_income_gdf = gpd.read_file(household_income_weighted_file)
+        print(f"Loaded {len(household_income_gdf)} household income weighted locations")
+        
+        # Verify required columns
+        ev_combined_required = ['ev_combined_weight']
+        household_income_required = ['household_income_weight']
+        
+        for col in ev_combined_required:
+            if col not in ev_combined_gdf.columns:
+                print(f"Error: Required column '{col}' not found in EV combined data")
+                return None
+                
+        for col in household_income_required:
+            if col not in household_income_gdf.columns:
+                print(f"Error: Required column '{col}' not found in household income data")
+                return None
+        
+        # Ensure both datasets have the same CRS
+        if ev_combined_gdf.crs != household_income_gdf.crs:
+            print(f"Converting CRS: EV combined {ev_combined_gdf.crs} -> household income {household_income_gdf.crs}")
+            ev_combined_gdf = ev_combined_gdf.to_crs(household_income_gdf.crs)
+        
+        print("Data validation successful!")
+        
+        # Combine weights by coordinate matching
+        print("Combining weights by coordinate matching...")
+        
+        # Extract coordinates from geometry
+        ev_combined_coords = [(geom.x, geom.y) for geom in ev_combined_gdf.geometry]
+        household_income_coords = [(geom.x, geom.y) for geom in household_income_gdf.geometry]
+        
+        print("EV combined coordinates extracted:", len(ev_combined_coords))
+        print("Household income coordinates extracted:", len(household_income_coords))
+        
+        # Create dictionaries for fast lookup
+        ev_combined_data = {}
+        for idx, (coord, row) in enumerate(zip(ev_combined_coords, ev_combined_gdf.itertuples())):
+            ev_combined_data[coord] = {
+                'ev_combined_weight': row.ev_combined_weight,
+                'building_density_weight': getattr(row, 'building_density_weight', 0),
+                'ev_vehicle_weight': getattr(row, 'ev_vehicle_weight', 0),
+                'buildings_within_radius': getattr(row, 'buildings_within_radius', 0),
+                'ev_count_2024_q4': getattr(row, 'ev_count_2024_q4', 0),
+                'geometry': ev_combined_gdf.geometry.iloc[idx]
+            }
+        
+        household_income_data = {}
+        for idx, (coord, row) in enumerate(zip(household_income_coords, household_income_gdf.itertuples())):
+            household_income_data[coord] = {
+                'household_income_weight': row.household_income_weight,
+                'total_annual_income': getattr(row, 'Total annual income (£)', 0),
+                'geometry': household_income_gdf.geometry.iloc[idx]
+            }
+        
+        # Find matches and combine data
+        combined_data = []
+        matched_coords = []
+        
+        for coord in ev_combined_coords:
+            if coord in household_income_data:
+                matched_coords.append(coord)
+                
+                # Combine the data - multiply ev_combined_weight by household_income_weight
+                final_combined_weight = ev_combined_data[coord]['ev_combined_weight'] * household_income_data[coord]['household_income_weight']
+                
+                combined_record = {
+                    'geometry': ev_combined_data[coord]['geometry'],  # Use EV combined geometry
+                    'ev_combined_weight': ev_combined_data[coord]['ev_combined_weight'],
+                    'household_income_weight': household_income_data[coord]['household_income_weight'],
+                    'final_combined_weight': final_combined_weight,
+                    'building_density_weight': ev_combined_data[coord]['building_density_weight'],
+                    'ev_vehicle_weight': ev_combined_data[coord]['ev_vehicle_weight'],
+                    'buildings_within_radius': ev_combined_data[coord]['buildings_within_radius'],
+                    'ev_count_2024_q4': ev_combined_data[coord]['ev_count_2024_q4'],
+                    'total_annual_income': household_income_data[coord]['total_annual_income']
+                }
+                
+                combined_data.append(combined_record)
+        
+        print("Coordinate matching results:")
+        print(f"- Matched pairs: {len(matched_coords)}")
+        print(f"- Unmatched EV combined locations: {len(ev_combined_coords) - len(matched_coords)}")
+        
+        if not combined_data:
+            print("Error: No matching coordinates found between datasets")
+            return None
+        
+        # Create GeoDataFrame from combined data
+        final_combined_gdf = gpd.GeoDataFrame(combined_data, crs=ev_combined_gdf.crs)
+        
+        print(f"Successfully combined {len(final_combined_gdf)} locations")
+        
+        # Analyze final combined results
+        if len(final_combined_gdf) > 0:
+            final_combined_weights = final_combined_gdf['final_combined_weight']
+            ev_combined_weights = final_combined_gdf['ev_combined_weight']
+            household_income_weights = final_combined_gdf['household_income_weight']
+            
+            print(f"\nHousehold Income Combined Weight Analysis:")
+            print(f"- Total locations: {len(final_combined_gdf)}")
+            print(f"- Final combined weight range: {final_combined_weights.min():.6f} to {final_combined_weights.max():.6f}")
+            print(f"- Average final combined weight: {final_combined_weights.mean():.6f}")
+            print(f"- High priority locations (>80th percentile): {(final_combined_weights > final_combined_weights.quantile(0.8)).sum()}")
+            print(f"- Medium priority locations (50-80th percentile): {((final_combined_weights > final_combined_weights.quantile(0.5)) & (final_combined_weights <= final_combined_weights.quantile(0.8))).sum()}")
+            print(f"- Low priority locations (≤50th percentile): {(final_combined_weights <= final_combined_weights.quantile(0.5)).sum()}")
+        
+        # Save final combined results
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, "household_income_combined_weighted_ev_locations.gpkg")
+        final_combined_gdf.to_file(output_path, driver='GPKG')
+        
+        print(f"Household income combined weighted results saved to: {output_path}")
+        print(f"Total locations saved: {len(final_combined_gdf)}")
+        
+        # Show top 3 highest final combined weighted locations
+        print(f"\nTop 3 Highest Final Combined Weighted Locations:")
+        top_final_locations = final_combined_gdf.nlargest(3, 'final_combined_weight')
+        for i, (idx, location) in enumerate(top_final_locations.iterrows(), 1):
+            print(f"  {i}. Final Combined Weight: {location['final_combined_weight']:.6f}")
+            print(f"     EV Combined: {location['ev_combined_weight']:.6f}, Income: {location['household_income_weight']:.6f}")
+            print(f"     Building: {location['building_density_weight']:.3f}, EV Vehicle: {location['ev_vehicle_weight']:.3f}")
+            print(f"     Annual Income: £{location['total_annual_income']:,.0f}, Buildings: {location['buildings_within_radius']}")
+            print(f"     Coords: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
+        
+        return final_combined_gdf
+        
+    except Exception as e:
+        print(f"Error in household income combined weighting: {e}")
+        return None
+
+# Test the functions if run directly
+if __name__ == "__main__":
+    # Test file paths (adjust as needed)
+    output_directory = "Output_Weighted"
+    buildings_file = os.path.join(output_directory, "buildings_weighted_ev_locations.gpkg")
+    vehicle_file = os.path.join(output_directory, "vehicle_weights_ev_locations.gpkg")
+    
+    # Test combined weighting
+    results = process_combined_weights(
+        buildings_weighted_file=buildings_file,
+        vehicle_weighted_file=vehicle_file,
+        output_dir=output_directory
+    )
     
     if results is not None:
-        print("Combined weighting analysis completed successfully!")
-        print(f"Combined dataset contains {len(results)} locations")
+        print(f"\nTest completed successfully! Results shape: {results.shape}")
     else:
-        print("Combined weighting analysis failed")
+        print("\nTest failed - check file paths and data")
