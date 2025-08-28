@@ -141,6 +141,7 @@ if __name__ == "__main__":
                 suitable_locations_file = os.path.join(output_dir, "suitable_ev_point_locations.gpkg")
                 
                 # Run building density weighting analysis
+                building_weight_results = None
                 if os.path.exists(buildings_file):
                     print("\n" + "="*60)
                     print("RUNNING BUILDING DENSITY WEIGHTING ANALYSIS")
@@ -164,9 +165,9 @@ if __name__ == "__main__":
                         building_weight_results = None
                 else:
                     print(f"Buildings file not found: {buildings_file}")
-                    building_weight_results = None
 
                 # Run household income weighting analysis
+                household_income_weight_results = None
                 if os.path.exists(income_file):
                     print("\n" + "="*60)
                     print("RUNNING HOUSEHOLD INCOME WEIGHTING ANALYSIS")
@@ -189,9 +190,9 @@ if __name__ == "__main__":
                         household_income_weight_results = None
                 else:
                     print(f"Income file not found: {income_file}")
-                    household_income_weight_results = None
 
                 # Run EV vehicle weighting analysis
+                ev_vehicle_weight_results = None
                 if os.path.exists(ev_vehicle_file):
                     print("\n" + "="*60)
                     print("RUNNING EV VEHICLE WEIGHTING ANALYSIS")
@@ -214,9 +215,9 @@ if __name__ == "__main__":
                         ev_vehicle_weight_results = None
                 else:
                     print(f"EV vehicle file not found: {ev_vehicle_file}")
-                    ev_vehicle_weight_results = None
 
                 # Run regular vehicle weighting analysis
+                vehicle_weight_results = None
                 if os.path.exists(vehicle_file):
                     print("\n" + "="*60)
                     print("RUNNING VEHICLE WEIGHTING ANALYSIS")
@@ -239,7 +240,6 @@ if __name__ == "__main__":
                         vehicle_weight_results = None
                 else:
                     print(f"Vehicle file not found: {vehicle_file}")
-                    vehicle_weight_results = None
 
                 # Run combined weighting analysis if the module is available
                 if WEIGHTING_AVAILABLE:
@@ -247,53 +247,71 @@ if __name__ == "__main__":
                     print("RUNNING COMBINED WEIGHTING ANALYSIS")
                     print("="*60)
                     
-                    try:
-                        # Process combined weights (building + vehicle)
-                        combined_results = process_combined_weights(
-                            output_directory=output_weighted_dir,
-                            buildings_file=buildings_file,
-                            vehicle_file=vehicle_file
-                        )
-                        
-                        if combined_results is not None:
-                            print("Combined weighting analysis (building + vehicle) completed successfully!")
-                        else:
-                            print("Combined weighting analysis failed")
+                    # Define paths to the generated weighted files
+                    buildings_weighted_file = os.path.join(output_weighted_dir, "buildings_weighted_ev_locations.gpkg")
+                    vehicle_weighted_file = os.path.join(output_weighted_dir, "vehicle_weights.gpkg")
+                    ev_vehicle_weighted_file = os.path.join(output_weighted_dir, "ev_vehicle_weights.gpkg")
+                    household_income_weighted_file = os.path.join(output_weighted_dir, "household_income_weights.gpkg")
+                    
+                    # Process combined weights (building + vehicle) - FIXED PARAMETERS
+                    if building_weight_results is not None and vehicle_weight_results is not None:
+                        try:
+                            combined_results = process_combined_weights(
+                                buildings_weighted_file=buildings_weighted_file,  # ✅ Correct parameter
+                                vehicle_weighted_file=vehicle_weighted_file,      # ✅ Correct parameter
+                                output_dir=output_weighted_dir                    # ✅ Correct parameter
+                            )
                             
-                    except Exception as e:
-                        print(f"Error in combined weighting: {e}")
+                            if combined_results is not None:
+                                print("Combined weighting analysis (building + vehicle) completed successfully!")
+                            else:
+                                print("Combined weighting analysis failed")
+                                
+                        except Exception as e:
+                            print(f"Error in combined weighting: {e}")
+                    else:
+                        print("Skipping combined weights - missing building or vehicle weights")
                         
-                    try:
-                        # Process EV combined weights (building + EV vehicle)
-                        ev_combined_results = process_ev_combined_weights(
-                            output_directory=output_weighted_dir,
-                            buildings_file=buildings_file,
-                            ev_vehicle_file=ev_vehicle_file
-                        )
-                        
-                        if ev_combined_results is not None:
-                            print("EV combined weighting analysis (building + EV vehicle) completed successfully!")
-                        else:
-                            print("EV combined weighting analysis failed")
+                    # Process EV combined weights (building + EV vehicle) - FIXED PARAMETERS
+                    if building_weight_results is not None and ev_vehicle_weight_results is not None:
+                        try:
+                            ev_combined_results = process_ev_combined_weights(
+                                buildings_weighted_file=buildings_weighted_file,   # ✅ Correct parameter
+                                ev_vehicle_weighted_file=ev_vehicle_weighted_file, # ✅ Correct parameter
+                                output_dir=output_weighted_dir                     # ✅ Correct parameter
+                            )
                             
-                    except Exception as e:
-                        print(f"Error in EV combined weighting: {e}")
+                            if ev_combined_results is not None:
+                                print("EV combined weighting analysis (building + EV vehicle) completed successfully!")
+                            else:
+                                print("EV combined weighting analysis failed")
+                                
+                        except Exception as e:
+                            print(f"Error in EV combined weighting: {e}")
+                    else:
+                        print("Skipping EV combined weights - missing building or EV vehicle weights")
                         
-                    try:
-                        # Process household income combined weights
-                        income_combined_results = process_household_income_combined_weights(
-                            output_directory=output_weighted_dir,
-                            buildings_file=buildings_file,
-                            income_file=income_file
-                        )
-                        
-                        if income_combined_results is not None:
-                            print("Household income combined weighting analysis completed successfully!")
-                        else:
-                            print("Household income combined weighting analysis failed")
+                    # Process household income combined weights - FIXED PARAMETERS  
+                    if ev_vehicle_weight_results is not None and household_income_weight_results is not None:
+                        try:
+                            # First create EV combined weights if not already done
+                            ev_combined_file = os.path.join(output_weighted_dir, "ev_combined_weighted_ev_locations.gpkg")
                             
-                    except Exception as e:
-                        print(f"Error in household income combined weighting: {e}")
+                            income_combined_results = process_household_income_combined_weights(
+                                ev_combined_weighted_file=ev_combined_file,            # ✅ Correct parameter
+                                household_income_weighted_file=household_income_weighted_file, # ✅ Correct parameter
+                                output_dir=output_weighted_dir                         # ✅ Correct parameter
+                            )
+                            
+                            if income_combined_results is not None:
+                                print("Household income combined weighting analysis completed successfully!")
+                            else:
+                                print("Household income combined weighting analysis failed")
+                                
+                        except Exception as e:
+                            print(f"Error in household income combined weighting: {e}")
+                    else:
+                        print("Skipping household income combined weights - missing EV or income weights")
                         
                 else:
                     print("Weighting combination module not available - skipping combined analysis")
