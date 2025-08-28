@@ -20,10 +20,11 @@ except ImportError as e:
 
 # Try to import weighting combination modules
 try:
-    from Optimal_Locations.weighting_ev_locations import process_combined_weights, process_ev_combined_weights, process_household_income_combined_weights
+    from Optimal_Locations.weighting_ev_locations import process_combined_weights, process_ev_combined_weights
+    from Optimal_Locations.core_and_income import process_s2_core_and_income_weights, process_s2_ev_core_and_income_weights
     WEIGHTING_AVAILABLE = True
 except ImportError:
-    print("Warning: weighting_ev_locations module not available. Skipping combined weighting analysis.")
+    print("Warning: weighting_ev_locations or core_and_income module not available. Skipping combined weighting analysis.")
     WEIGHTING_AVAILABLE = False
 
 # Create a simple vehicle count summary function since the import might be missing
@@ -254,6 +255,7 @@ if __name__ == "__main__":
                     household_income_weighted_file = os.path.join(output_weighted_dir, "household_income_weights.gpkg")
                     
                     # Process combined weights (building + vehicle) - FIXED PARAMETERS
+                    combined_results = None
                     if building_weight_results is not None and vehicle_weight_results is not None:
                         try:
                             combined_results = process_combined_weights(
@@ -273,6 +275,7 @@ if __name__ == "__main__":
                         print("Skipping combined weights - missing building or vehicle weights")
                         
                     # Process EV combined weights (building + EV vehicle) - FIXED PARAMETERS
+                    ev_combined_results = None
                     if building_weight_results is not None and ev_vehicle_weight_results is not None:
                         try:
                             ev_combined_results = process_ev_combined_weights(
@@ -291,27 +294,47 @@ if __name__ == "__main__":
                     else:
                         print("Skipping EV combined weights - missing building or EV vehicle weights")
                         
-                    # Process household income combined weights - FIXED PARAMETERS  
-                    if ev_vehicle_weight_results is not None and household_income_weight_results is not None:
+                    # Process S2 Core and Income combined weights (All Vehicles) - NEW PROCESS
+                    combined_weighted_file = os.path.join(output_weighted_dir, "combined_weighted_ev_locations.gpkg")
+                    
+                    if combined_results is not None and household_income_weight_results is not None:
                         try:
-                            # First create EV combined weights if not already done
-                            ev_combined_file = os.path.join(output_weighted_dir, "ev_combined_weighted_ev_locations.gpkg")
-                            
-                            income_combined_results = process_household_income_combined_weights(
-                                ev_combined_weighted_file=ev_combined_file,            # ✅ Correct parameter
-                                household_income_weighted_file=household_income_weighted_file, # ✅ Correct parameter
-                                output_dir=output_weighted_dir                         # ✅ Correct parameter
+                            s2_combined_results = process_s2_core_and_income_weights(
+                                combined_weighted_file=combined_weighted_file,
+                                household_income_weighted_file=household_income_weighted_file,
+                                output_dir=output_weighted_dir
                             )
                             
-                            if income_combined_results is not None:
-                                print("Household income combined weighting analysis completed successfully!")
+                            if s2_combined_results is not None:
+                                print("S2 All Vehicles Core and Income weighting analysis completed successfully!")
                             else:
-                                print("Household income combined weighting analysis failed")
+                                print("S2 All Vehicles Core and Income weighting analysis failed")
                                 
                         except Exception as e:
-                            print(f"Error in household income combined weighting: {e}")
+                            print(f"Error in S2 All Vehicles Core and Income weighting: {e}")
                     else:
-                        print("Skipping household income combined weights - missing EV or income weights")
+                        print("Skipping S2 All Vehicles Core and Income weights - missing combined weights or household income weights")
+                        
+                    # Process S2 EV Core and Income combined weights (EV Vehicles) - NEW PROCESS
+                    ev_combined_weighted_file = os.path.join(output_weighted_dir, "ev_combined_weighted_ev_locations.gpkg")
+                    
+                    if ev_combined_results is not None and household_income_weight_results is not None:
+                        try:
+                            s2_ev_combined_results = process_s2_ev_core_and_income_weights(
+                                ev_combined_weighted_file=ev_combined_weighted_file,
+                                household_income_weighted_file=household_income_weighted_file,
+                                output_dir=output_weighted_dir
+                            )
+                            
+                            if s2_ev_combined_results is not None:
+                                print("S2 EV Vehicles Core and Income weighting analysis completed successfully!")
+                            else:
+                                print("S2 EV Vehicles Core and Income weighting analysis failed")
+                                
+                        except Exception as e:
+                            print(f"Error in S2 EV Vehicles Core and Income weighting: {e}")
+                    else:
+                        print("Skipping S2 EV Vehicles Core and Income weights - missing EV combined weights or household income weights")
                         
                 else:
                     print("Weighting combination module not available - skipping combined analysis")
@@ -350,5 +373,6 @@ if __name__ == "__main__":
     print("Check the 'output' and 'Output_Weighted' directories for results.")
     print("Expected combined weight files:")
     print("- combined_weighted_ev_locations.gpkg")
-    print("- ev_combined_weighted_ev_locations.gpkg") 
-    print("- household_income_combined_weighted_ev_locations.gpkg")
+    print("- ev_combined_weighted_ev_locations.gpkg")
+    print("- s2_household_income_combined_all_vehicles_core.gpkg")
+    print("- s2_household_income_combined_ev_vehicles_core.gpkg")
