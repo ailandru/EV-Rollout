@@ -133,7 +133,7 @@ def apply_exclusions_with_partial_roads(suitable_roads, suitable_pavements, excl
         return None, None
 
 
-def find_pavements_near_roads(pavements_outside, roads_outside_or_partial, max_distance_meters=50):
+def find_pavements_near_roads(pavements_outside, roads_outside_or_partial, max_distance_meters=3):
     """
     Find suitable pavements within specified distance of suitable roads.
     
@@ -215,7 +215,7 @@ def convert_polygon_pavements_to_points(polygon_pavements):
 
 def analyze_ev_charger_suitability(ev_charger_file, highway_file, pavement_file, 
                                    buffer_distance=100, min_road_width=5,
-                                   max_pavement_road_distance=50):
+                                   max_pavement_road_distance=3):
     """
     Complete analysis pipeline for EV charger suitability.
     

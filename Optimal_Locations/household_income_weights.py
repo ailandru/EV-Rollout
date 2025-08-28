@@ -34,184 +34,232 @@ def assign_household_income_weights(suitable_locations_gdf, income_data_gdf):
     """
     try:
         print("\nProcessing household income weights...")
+        print(f"Input datasets: {len(suitable_locations_gdf)} EV locations, {len(income_data_gdf)} income areas")
+        
+        # Debug: Check column names and data types
+        print(f"\nIncome data columns: {list(income_data_gdf.columns)}")
+        print(f"Income data CRS: {income_data_gdf.crs}")
+        print(f"EV locations CRS: {suitable_locations_gdf.crs}")
+        
+        # Check if the column exists (could have different name)
+        income_col = None
+        possible_names = ['Total annual income (£)', 'total_annual_income', 'Total annual income', 'income']
+        for col in income_data_gdf.columns:
+            if any(name.lower() in col.lower() for name in ['income', 'annual']):
+                income_col = col
+                print(f"Found income column: '{income_col}'")
+                break
+        
+        if income_col is None:
+            print("ERROR: No income column found!")
+            print("Available columns:", list(income_data_gdf.columns))
+            return None
+        
+        # Debug: Show sample raw data before cleaning
+        print(f"\nSample raw income values from '{income_col}':")
+        sample_raw = income_data_gdf[income_col].head(10)
+        print(sample_raw.tolist())
+        print(f"Data type: {income_data_gdf[income_col].dtype}")
         
         # Ensure both datasets use the same CRS
         if suitable_locations_gdf.crs != income_data_gdf.crs:
             print(f"Converting income data CRS from {income_data_gdf.crs} to {suitable_locations_gdf.crs}")
             income_data_gdf = income_data_gdf.to_crs(suitable_locations_gdf.crs)
         
-        # Convert 'Total annual income (£)' column to numeric
-        if 'Total annual income (£)' not in income_data_gdf.columns:
-            raise KeyError("Required column 'Total annual income (£)' not found in income data")
+        # More robust string cleaning for currency data
+        print("Cleaning currency formatting from income data...")
         
-        income_data_gdf['Total annual income (£)'] = pd.to_numeric(
-            income_data_gdf['Total annual income (£)'], errors='coerce'
+        # Create a copy to avoid modifying original
+        income_data_copy = income_data_gdf.copy()
+        
+        # Convert to string and clean comprehensively
+        income_data_copy[income_col] = (
+            income_data_copy[income_col]
+            .astype(str)  # Ensure it's a string
+            .str.replace('£', '', regex=False)  # Remove pound signs
+            .str.replace('$', '', regex=False)  # Remove dollar signs
+            .str.replace(',', '', regex=False)  # Remove commas
+            .str.replace(' ', '', regex=False)  # Remove spaces
+            .str.replace('None', '', regex=False)  # Remove 'None' strings
+            .str.replace('nan', '', regex=False)  # Remove 'nan' strings
+            .str.replace('NaN', '', regex=False)  # Remove 'NaN' strings
+            .str.strip()  # Remove leading/trailing whitespace
         )
         
+        # Debug: Show cleaned values
+        print(f"Sample cleaned values:")
+        sample_cleaned = income_data_copy[income_col].head(10)
+        print(sample_cleaned.tolist())
+        
+        # Convert to numeric
+        income_data_copy[income_col] = pd.to_numeric(
+            income_data_copy[income_col], errors='coerce'
+        )
+        
+        # Check conversion success
+        valid_income_count = income_data_copy[income_col].notna().sum()
+        print(f"Successfully converted {valid_income_count} out of {len(income_data_copy)} income values to numeric")
+        
+        if valid_income_count == 0:
+            print("ERROR: No valid numeric income values found after conversion!")
+            return None
+        
         # Remove rows with NaN income values
-        income_data_clean = income_data_gdf.dropna(subset=['Total annual income (£)'])
-        print(f"Income data: {len(income_data_gdf)} total areas, {len(income_data_clean)} with valid income data")
+        income_data_clean = income_data_copy.dropna(subset=[income_col])
+        print(f"After cleaning: {len(income_data_clean)} areas with valid income data")
         
-        # Spatial join to match locations with income areas
-        print("Performing spatial join between EV locations and income areas...")
-        joined_gdf = gpd.sjoin(suitable_locations_gdf, income_data_clean, how='left', predicate='within')
+        # Debug: Show final cleaned numeric values
+        print(f"Sample final numeric income values:")
+        sample_final = income_data_clean[income_col].head(10)
+        print(sample_final.tolist())
         
-        print(f"Spatial join results: {len(joined_gdf)} locations processed")
+        print(f"Income range: £{income_data_clean[income_col].min():,.0f} to £{income_data_clean[income_col].max():,.0f}")
         
-        # Handle locations that didn't get matched
-        unmatched = joined_gdf['Total annual income (£)'].isna().sum()
-        if unmatched > 0:
-            print(f"Warning: {unmatched} locations could not be matched to income areas")
-            # Assign median income to unmatched locations
-            median_income = income_data_clean['Total annual income (£)'].median()
-            joined_gdf['Total annual income (£)'].fillna(median_income, inplace=True)
-            print(f"Assigned median income (£{median_income:,.0f}) to unmatched locations")
-        
-        # Extract income values for normalization
-        income_values = joined_gdf['Total annual income (£)']
-        
-        print(f"Income statistics:")
-        print(f"- Min income: £{income_values.min():,.0f}")
-        print(f"- Max income: £{income_values.max():,.0f}")
-        print(f"- Mean income: £{income_values.mean():,.0f}")
-        print(f"- Median income: £{income_values.median():,.0f}")
-        
-        # Min-max normalization to scale values between 0 and 1
-        min_income = income_values.min()
-        max_income = income_values.max()
-        
+        # Ensure both datasets use the same CRS
+        if suitable_locations_gdf.crs != income_data_clean.crs:
+            income_data_clean = income_data_clean.to_crs(suitable_locations_gdf.crs)
+
+        print(f"Spatial join: matching {len(suitable_locations_gdf)} EV locations with {len(income_data_clean)} income areas")
+
+        # Spatial join to assign income to suitable locations
+        locations_with_weights = gpd.sjoin(
+            suitable_locations_gdf,
+            income_data_clean[['geometry', income_col, 'MSOA11CD']],  # Include MSOA11CD if available
+            how='left',
+            predicate='within'
+        )
+
+        # Handle locations not within any income area by filling with median income
+        median_income = income_data_clean[income_col].median()
+        locations_with_weights[income_col] = locations_with_weights[income_col].fillna(median_income)
+        print(f"Filled {locations_with_weights[income_col].isna().sum()} missing values with median income: £{median_income:,.0f}")
+
+        # Get min and max income for normalization
+        max_income = locations_with_weights[income_col].max()
+        min_income = locations_with_weights[income_col].min()
+
+        # Apply min-max normalization to ensure weights are in [0, 1] range
         if max_income > min_income:
-            household_income_weights = (income_values - min_income) / (max_income - min_income)
+            # Standard min-max normalization formula
+            locations_with_weights['household_income_weight'] = (
+                (locations_with_weights[income_col] - min_income) /
+                (max_income - min_income)
+            )
         else:
-            # If all incomes are the same, assign equal weights
-            household_income_weights = pd.Series([0.5] * len(income_values), index=income_values.index)
-            print("Warning: All income values are identical, assigning equal weights of 0.5")
+            # If all incomes are the same, assign equal weights of 0.5
+            locations_with_weights['household_income_weight'] = 0.5
+
+        # Verify weights are in [0, 1] range
+        weight_min = locations_with_weights['household_income_weight'].min()
+        weight_max = locations_with_weights['household_income_weight'].max()
+
+        print(f"Household income statistics:")
+        print(f"- Income range: £{min_income:,.0f} to £{max_income:,.0f}")
+        print(f"- Locations with min income: {(locations_with_weights[income_col] == min_income).sum()}")
+        print(f"- Locations with max income: {(locations_with_weights[income_col] == max_income).sum()}")
+        print(f"")
+        print(f"Household income weight statistics (min-max normalized to 0-1 scale):")
+        print(f"- Weight range: {weight_min:.3f} to {weight_max:.3f}")
+        print(f"- Average weight: {locations_with_weights['household_income_weight'].mean():.3f}")
+        print(f"- Standard deviation: {locations_with_weights['household_income_weight'].std():.3f}")
+
+        # Verify normalization worked correctly
+        if not (0.0 <= weight_min <= weight_max <= 1.0):
+            print(f"WARNING: Weights are not in [0,1] range! Min: {weight_min}, Max: {weight_max}")
+        else:
+            print(f"✓ Confirmed: All household income weights are properly normalized to [0,1] range")
+
+        # Rename the income column to standardized name for consistency
+        locations_with_weights['total_annual_income'] = locations_with_weights[income_col]
         
-        print(f"Household income weight statistics:")
-        print(f"- Weight range: {household_income_weights.min():.6f} to {household_income_weights.max():.6f}")
-        print(f"- Mean weight: {household_income_weights.mean():.3f}")
-        print(f"- Std weight: {household_income_weights.std():.3f}")
-        
-        # Create result GeoDataFrame with original geometry from suitable locations
-        result_gdf = suitable_locations_gdf.copy()
-        result_gdf['Total annual income (£)'] = income_values.values
-        result_gdf['household_income_weight'] = household_income_weights.values
-        result_gdf['min_income_used'] = min_income
-        result_gdf['max_income_used'] = max_income
-        
-        return result_gdf
-        
+        print(f"Assigned household income weights to {len(locations_with_weights)} suitable locations")
+
+        return locations_with_weights
+
     except Exception as e:
         print(f"Error assigning household income weights: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
-def process_household_income_weights(suitable_ev_locations_file, income_data_file, output_dir):
+def process_household_income_weights(suitable_ev_locations_file, income_data_file, output_dir="Output_Weighted"):
     """
-    Main function to process household income weights for EV locations.
-    
+    Complete pipeline to process household income weights for EV charger locations.
+
     Arguments:
-        suitable_ev_locations_file (str): Path to suitable EV point locations file
-        income_data_file (str): Path to household income data file
+        suitable_ev_locations_file (str): Path to suitable EV locations file
+        income_data_file (str): Path to income data file (MSOA level)
         output_dir (str): Output directory for results
-    
+
     Returns:
-        GeoDataFrame: Household income weighted locations or None if error
+        gpd.GeoDataFrame: EV locations with household income weights
     """
     try:
-        print("\n" + "="*60)
-        print("HOUSEHOLD INCOME WEIGHTING ANALYSIS")
-        print("Using 'Total annual income (£)' column with min-max normalization")
-        print("="*60)
-        
+        print("Starting household income weighting analysis...")
+        print("=" * 60)
+
         # Load suitable EV locations
-        if not os.path.exists(suitable_ev_locations_file):
-            print(f"Error: Suitable EV locations file not found: {suitable_ev_locations_file}")
-            return None
-            
-        ev_locations_gdf = gpd.read_file(suitable_ev_locations_file)
-        print(f"Loaded {len(ev_locations_gdf)} suitable EV locations")
+        print(f"Loading suitable EV locations from: {suitable_ev_locations_file}")
+        suitable_locations = gpd.read_file(suitable_ev_locations_file)
+        print(f"Loaded {len(suitable_locations)} suitable EV locations")
+
+        # Load income data
+        print(f"Loading income data from: {income_data_file}")
+        income_data = gpd.read_file(income_data_file)
+        print(f"Loaded income data for {len(income_data)} areas")
         
-        # Load household income data
-        if not os.path.exists(income_data_file):
-            print(f"Error: Household income data file not found: {income_data_file}")
-            return None
-            
-        income_gdf = gpd.read_file(income_data_file)
-        print(f"Loaded {len(income_gdf)} income areas")
-        
-        # Verify required column exists
-        if 'Total annual income (£)' not in income_gdf.columns:
-            print(f"Error: Required column 'Total annual income (£)' not found")
-            print(f"Available columns: {list(income_gdf.columns)}")
-            return None
-        
-        # Process household income weights
-        weighted_locations = assign_household_income_weights(ev_locations_gdf, income_gdf)
-        
-        if weighted_locations is not None:
-            # Save results
-            os.makedirs(output_dir, exist_ok=True)
-            output_file = os.path.join(output_dir, "household_income_weights.gpkg")
-            weighted_locations.to_file(output_file, driver='GPKG')
-            
-            # Also save CSV summary
-            csv_output = os.path.join(output_dir, "household_income_weights.csv")
-            weights_df = weighted_locations.drop(columns=['geometry'])
-            weights_df.to_csv(csv_output, index=False)
-            
-            print(f"\nHousehold income weighted results saved to: {output_file}")
-            print(f"CSV summary saved to: {csv_output}")
-            print(f"Total locations saved: {len(weighted_locations)}")
-            
-            # Display summary statistics
-            weights = weighted_locations['household_income_weight']
-            incomes = weighted_locations['Total annual income (£)']
-            
-            print(f"\nFinal Summary:")
-            print(f"- Locations processed: {len(weighted_locations)}")
-            print(f"- Weight range: {weights.min():.6f} to {weights.max():.6f}")
-            print(f"- Average weight: {weights.mean():.3f}")
-            print(f"- Income range: £{incomes.min():,.0f} to £{incomes.max():,.0f}")
-            print(f"- Average income: £{incomes.mean():,.0f}")
-            
-            # Show top 5 highest income weighted locations
-            print(f"\nTop 5 Highest Income Weighted Locations:")
-            top_locations = weighted_locations.nlargest(5, 'household_income_weight')
-            for i, (idx, location) in enumerate(top_locations.iterrows(), 1):
-                print(f"  {i}. Weight: {location['household_income_weight']:.6f}, "
-                      f"Income: £{location['Total annual income (£)']:,.0f}, "
-                      f"Coords: [{location.geometry.x:.6f}, {location.geometry.y:.6f}]")
-            
-            return weighted_locations
+        # Check for income column
+        income_cols = [col for col in income_data.columns if 'income' in col.lower() or 'annual' in col.lower()]
+        if income_cols:
+            print(f"Found potential income columns: {income_cols}")
         else:
-            print("Household income weighting failed")
+            print(f"Available columns in income data: {list(income_data.columns)}")
+
+        # Extract coordinates from suitable locations (if needed for debugging)
+        # suitable_locations = extract_coordinates(suitable_locations)
+
+        # Assign household income weights
+        print("\nAssigning household income weights using min-max normalization...")
+        weighted_locations = assign_household_income_weights(suitable_locations, income_data)
+
+        if weighted_locations is None:
             return None
-            
+
+        # Save results
+        os.makedirs(output_dir, exist_ok=True)
+        output_file = os.path.join(output_dir, "household_income_weights.gpkg")
+
+        print(f"\nSaving household income weighted locations to: {output_file}")
+        weighted_locations.to_file(output_file, driver='GPKG')
+
+        # Also save as CSV for easy inspection
+        csv_output = os.path.join(output_dir, "household_income_weights.csv")
+        weights_df = weighted_locations.drop(columns=['geometry'])
+        weights_df.to_csv(csv_output, index=False)
+        print(f"Saved CSV summary to: {csv_output}")
+
+        print("\n" + "=" * 60)
+        print("HOUSEHOLD INCOME WEIGHTING ANALYSIS COMPLETE")
+        print("=" * 60)
+
+        return weighted_locations
+
     except Exception as e:
         print(f"Error in household income weighting process: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
-# Test the functions if run directly
 if __name__ == "__main__":
-    # Fixed file paths - need to go up one level from Optimal_Locations directory
+    # Example usage
     suitable_locations_file = "../output/suitable_ev_point_locations.gpkg"
     income_data_file = "../Data/wcr_Income_MSOA.gpkg"
     output_dir = "../Output_Weighted"
-    
-    # Test household income weighting
-    print("Testing household income weighting with corrected file paths...")
-    results = process_household_income_weights(
-        suitable_ev_locations_file=suitable_locations_file,
-        income_data_file=income_data_file,
-        output_dir=output_dir
-    )
-    
+
+    # Process household income weights
+    results = process_household_income_weights(suitable_locations_file, income_data_file, output_dir)
+
     if results is not None:
-        print(f"\nTest completed successfully! Results shape: {results.shape}")
-        print("="*60)
-        print("HOUSEHOLD INCOME WEIGHTING TEST COMPLETE")
-        print("="*60)
-    else:
-        print("\nTest failed - check file paths and data")
+        print("Household income weighting completed successfully!")
