@@ -95,9 +95,19 @@ def combine_weights_by_coordinates(buildings_gdf, vehicle_gdf):
         
         vehicle_data = {}
         for idx, (coord, row) in enumerate(zip(vehicle_coords, vehicle_gdf.itertuples())):
+            # Try multiple possible column names for vehicle count
+            vehicle_count_value = 0
+            for possible_col in ['vehicle_count', '2025 Q1', '2025Q1', 'Total']:
+                if hasattr(row, possible_col.replace(' ', '_')):  # pandas replaces spaces with underscores in named tuples
+                    vehicle_count_value = getattr(row, possible_col.replace(' ', '_'), 0)
+                    break
+                elif hasattr(row, possible_col):
+                    vehicle_count_value = getattr(row, possible_col, 0)
+                    break
+            
             vehicle_data[coord] = {
                 'vehicle_weight': row.vehicle_weight,
-                'vehicle_count': getattr(row, '2025 Q1', getattr(row, 'total_vehicles', 0)),
+                'vehicle_count': vehicle_count_value,
                 'geometry': vehicle_gdf.geometry.iloc[idx]
             }
         
@@ -135,6 +145,11 @@ def combine_weights_by_coordinates(buildings_gdf, vehicle_gdf):
         combined_gdf = gpd.GeoDataFrame(combined_data, crs=buildings_gdf.crs)
         
         print(f"Successfully combined {len(combined_gdf)} locations")
+        
+        # Debug: Check if vehicle counts are properly transferred
+        print(f"Vehicle count range in combined data: {combined_gdf['vehicle_count'].min()} to {combined_gdf['vehicle_count'].max()}")
+        print(f"Non-zero vehicle counts: {(combined_gdf['vehicle_count'] > 0).sum()}")
+        
         return combined_gdf
         
     except Exception as e:
@@ -346,9 +361,19 @@ def process_ev_combined_weights(buildings_weighted_file, ev_vehicle_weighted_fil
         
         ev_vehicle_data = {}
         for idx, (coord, row) in enumerate(zip(ev_vehicle_coords, ev_vehicle_gdf.itertuples())):
+            # Try multiple possible column names for EV count
+            ev_count_value = 0
+            for possible_col in ['ev_count_2024_q4', '2024 Q4', '2024Q4', 'ev_count']:
+                if hasattr(row, possible_col.replace(' ', '_')):  # pandas replaces spaces with underscores in named tuples
+                    ev_count_value = getattr(row, possible_col.replace(' ', '_'), 0)
+                    break
+                elif hasattr(row, possible_col):
+                    ev_count_value = getattr(row, possible_col, 0)
+                    break
+            
             ev_vehicle_data[coord] = {
                 'ev_vehicle_weight': row.ev_vehicle_weight,
-                'ev_count_2024_q4': getattr(row, '2024 Q4', getattr(row, 'ev_count', 0)),
+                'ev_count_2024_q4': ev_count_value,
                 'geometry': ev_vehicle_gdf.geometry.iloc[idx]
             }
         

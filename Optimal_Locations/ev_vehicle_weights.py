@@ -35,44 +35,80 @@ def assign_ev_vehicle_weights(suitable_locations, ev_vehicle_data):
 
     Arguments:
         suitable_locations (gpd.GeoDataFrame): Suitable EV charger locations
-        ev_vehicle_data (gpd.GeoDataFrame): EV vehicle count data by LSOA with '2024 Q4' column
+        ev_vehicle_data (gpd.GeoDataFrame): EV vehicle count data by LSOA
 
     Returns:
         gpd.GeoDataFrame: Suitable locations with EV vehicle count weights (0-1 scale)
     """
     try:
+        # Find EV count column - check for multiple possible column names
+        ev_count_col = None
+        possible_cols = ['2024 Q4', '2024Q4', 'ev_count_2024_q4', 'EV_count']
+        
+        print(f"Available columns in EV vehicle data: {list(ev_vehicle_data.columns)}")
+        
+        for col in ev_vehicle_data.columns:
+            if any(possible in col for possible in ['2024', 'Q4', 'ev_count', 'EV']):
+                ev_count_col = col
+                print(f"Found EV count column: '{ev_count_col}'")
+                break
+        
+        if ev_count_col is None:
+            print("ERROR: No EV count column found!")
+            return None
+
         # Ensure both datasets have the same CRS
         if suitable_locations.crs != ev_vehicle_data.crs:
             ev_vehicle_data = ev_vehicle_data.to_crs(suitable_locations.crs)
 
+        # Convert EV count column to numeric
+        ev_vehicle_data[ev_count_col] = pd.to_numeric(ev_vehicle_data[ev_count_col], errors='coerce')
+        
+        # Check for valid data
+        valid_count = ev_vehicle_data[ev_count_col].notna().sum()
+        print(f"EV vehicle data: {valid_count} areas with valid EV counts out of {len(ev_vehicle_data)}")
+        
+        if valid_count == 0:
+            print("ERROR: No valid EV count data found!")
+            return None
+
         print(f"Spatial join: matching {len(suitable_locations)} EV locations with {len(ev_vehicle_data)} LSOA areas")
+
+        # Prepare columns for spatial join
+        join_columns = ['geometry', ev_count_col]
+        if 'LSOA11CD' in ev_vehicle_data.columns:
+            join_columns.append('LSOA11CD')
 
         # Spatial join to assign EV vehicle counts to suitable locations
         locations_with_weights = gpd.sjoin(
             suitable_locations,
-            ev_vehicle_data[['geometry', '2024 Q4', 'LSOA11CD']],
+            ev_vehicle_data[join_columns],
             how='left',
             predicate='within'
         )
 
         # Handle locations not within any LSOA by filling with minimum EV count
-        min_ev_count = ev_vehicle_data['2024 Q4'].min()
-        locations_with_weights['2024 Q4'] = locations_with_weights['2024 Q4'].fillna(min_ev_count)
+        min_ev_count = ev_vehicle_data[ev_count_col].min()
+        locations_with_weights[ev_count_col] = locations_with_weights[ev_count_col].fillna(min_ev_count)
+        print(f"Filled {locations_with_weights[ev_count_col].isna().sum()} missing values with min EV count: {min_ev_count}")
 
         # Get min and max EV counts for normalization
-        max_evs = locations_with_weights['2024 Q4'].max()
-        min_evs = locations_with_weights['2024 Q4'].min()
+        max_evs = locations_with_weights[ev_count_col].max()
+        min_evs = locations_with_weights[ev_count_col].min()
 
         # Apply min-max normalization to ensure weights are in [0, 1] range
         if max_evs > min_evs:
             # Standard min-max normalization formula
             locations_with_weights['ev_vehicle_weight'] = (
-                    (locations_with_weights['2024 Q4'] - min_evs) /
+                    (locations_with_weights[ev_count_col] - min_evs) /
                     (max_evs - min_evs)
             )
         else:
             # If all EV counts are the same, assign equal weights of 0.5
             locations_with_weights['ev_vehicle_weight'] = 0.5
+
+        # Create standardized column name
+        locations_with_weights['ev_count_2024_q4'] = locations_with_weights[ev_count_col]
 
         # Verify weights are in [0, 1] range
         weight_min = locations_with_weights['ev_vehicle_weight'].min()
@@ -80,8 +116,9 @@ def assign_ev_vehicle_weights(suitable_locations, ev_vehicle_data):
 
         print(f"EV vehicle count statistics:")
         print(f"- EV count range: {min_evs} to {max_evs}")
-        print(f"- Locations with min EV count: {(locations_with_weights['2024 Q4'] == min_evs).sum()}")
-        print(f"- Locations with max EV count: {(locations_with_weights['2024 Q4'] == max_evs).sum()}")
+        print(f"- Locations with min EV count: {(locations_with_weights[ev_count_col] == min_evs).sum()}")
+        print(f"- Locations with max EV count: {(locations_with_weights[ev_count_col] == max_evs).sum()}")
+        print(f"- Total EV count across all locations: {locations_with_weights[ev_count_col].sum()}")
         print(f"")
         print(f"EV vehicle weight statistics (min-max normalized to 0-1 scale):")
         print(f"- Weight range: {weight_min:.3f} to {weight_max:.3f}")
@@ -100,6 +137,8 @@ def assign_ev_vehicle_weights(suitable_locations, ev_vehicle_data):
 
     except Exception as e:
         print(f"Error assigning EV vehicle weights: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -117,7 +156,7 @@ def process_ev_vehicle_weights(suitable_ev_locations_file, ev_vehicle_data_file,
     """
     try:
         print("Starting EV vehicle weighting analysis...")
-        print("=" * 50)
+        print("=" * 60)
 
         # Load suitable EV locations
         print(f"Loading suitable EV locations from: {suitable_ev_locations_file}")
@@ -128,21 +167,9 @@ def process_ev_vehicle_weights(suitable_ev_locations_file, ev_vehicle_data_file,
         print(f"Loading EV vehicle data from: {ev_vehicle_data_file}")
         ev_vehicle_data = gpd.read_file(ev_vehicle_data_file)
         print(f"Loaded EV vehicle data for {len(ev_vehicle_data)} LSOA areas")
+        print(f"EV vehicle data columns: {list(ev_vehicle_data.columns)}")
 
-        # Verify required columns
-        if '2024 Q4' not in ev_vehicle_data.columns:
-            print("Error: '2024 Q4' column not found in EV vehicle data")
-            print(f"Available columns: {list(ev_vehicle_data.columns)}")
-            return None
-
-        # Display EV vehicle data statistics
-        ev_vehicle_counts = ev_vehicle_data['2024 Q4']
-        print(f"EV vehicle data statistics:")
-        print(f"- Total EVs in study area: {ev_vehicle_counts.sum():,}")
-        print(f"- EV count range: {ev_vehicle_counts.min()} to {ev_vehicle_counts.max()}")
-        print(f"- Average EVs per LSOA: {ev_vehicle_counts.mean():.1f}")
-
-        # Extract coordinates from suitable locations
+        # Extract coordinates from suitable locations (if needed)
         suitable_locations = extract_coordinates(suitable_locations)
 
         # Assign EV vehicle weights
@@ -165,14 +192,16 @@ def process_ev_vehicle_weights(suitable_ev_locations_file, ev_vehicle_data_file,
         weights_df.to_csv(csv_output, index=False)
         print(f"Saved CSV summary to: {csv_output}")
 
-        print("\n" + "=" * 50)
+        print("\n" + "=" * 60)
         print("EV VEHICLE WEIGHTING ANALYSIS COMPLETE")
-        print("=" * 50)
+        print("=" * 60)
 
         return weighted_locations
 
     except Exception as e:
         print(f"Error in EV vehicle weighting process: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 

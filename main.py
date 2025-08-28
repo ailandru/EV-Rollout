@@ -165,10 +165,81 @@ if __name__ == "__main__":
                 else:
                     print(f"Buildings file not found: {buildings_file}")
                     building_weight_results = None
-                
-                # Run other weighting analyses if the required files exist and functions are available
-                # (Similar pattern for vehicle weights, EV vehicle weights, income weights, etc.)
-                print("\nNote: Additional weighting analyses can be added here as modules become available.")
+
+                # Run household income weighting analysis
+                if os.path.exists(income_file):
+                    print("\n" + "="*60)
+                    print("RUNNING HOUSEHOLD INCOME WEIGHTING ANALYSIS")
+                    print("="*60)
+                    
+                    try:
+                        household_income_weight_results = process_household_income_weights(
+                            suitable_ev_locations_file=suitable_locations_file,
+                            income_data_file=income_file,
+                            output_dir=output_weighted_dir
+                        )
+                        
+                        if household_income_weight_results is not None:
+                            print("Household income weighting analysis completed successfully!")
+                        else:
+                            print("Household income weighting analysis failed")
+                            
+                    except Exception as e:
+                        print(f"Error in household income weighting: {e}")
+                        household_income_weight_results = None
+                else:
+                    print(f"Income file not found: {income_file}")
+                    household_income_weight_results = None
+
+                # Run EV vehicle weighting analysis
+                if os.path.exists(ev_vehicle_file):
+                    print("\n" + "="*60)
+                    print("RUNNING EV VEHICLE WEIGHTING ANALYSIS")
+                    print("="*60)
+                    
+                    try:
+                        ev_vehicle_weight_results = process_ev_vehicle_weights(
+                            suitable_ev_locations_file=suitable_locations_file,
+                            ev_vehicle_data_file=ev_vehicle_file,
+                            output_dir=output_weighted_dir
+                        )
+                        
+                        if ev_vehicle_weight_results is not None:
+                            print("EV vehicle weighting analysis completed successfully!")
+                        else:
+                            print("EV vehicle weighting analysis failed")
+                            
+                    except Exception as e:
+                        print(f"Error in EV vehicle weighting: {e}")
+                        ev_vehicle_weight_results = None
+                else:
+                    print(f"EV vehicle file not found: {ev_vehicle_file}")
+                    ev_vehicle_weight_results = None
+
+                # Run regular vehicle weighting analysis
+                if os.path.exists(vehicle_file):
+                    print("\n" + "="*60)
+                    print("RUNNING VEHICLE WEIGHTING ANALYSIS")
+                    print("="*60)
+                    
+                    try:
+                        vehicle_weight_results = process_vehicle_weights(
+                            suitable_ev_locations_file=suitable_locations_file,
+                            vehicle_data_file=vehicle_file,
+                            output_dir=output_weighted_dir
+                        )
+                        
+                        if vehicle_weight_results is not None:
+                            print("Vehicle weighting analysis completed successfully!")
+                        else:
+                            print("Vehicle weighting analysis failed")
+                            
+                    except Exception as e:
+                        print(f"Error in vehicle weighting: {e}")
+                        vehicle_weight_results = None
+                else:
+                    print(f"Vehicle file not found: {vehicle_file}")
+                    vehicle_weight_results = None
                 
             else:
                 print("No suitable point locations found for weighting analysis")
