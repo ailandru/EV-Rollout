@@ -18,7 +18,7 @@ except ImportError as e:
     print(f"Import error: {e}")
     print("Some modules may be missing. The script will continue with available functionality.")
 
-# Try to import optional modules
+# Try to import weighting combination modules
 try:
     from Optimal_Locations.weighting_ev_locations import process_combined_weights, process_ev_combined_weights, process_household_income_combined_weights
     WEIGHTING_AVAILABLE = True
@@ -240,6 +240,63 @@ if __name__ == "__main__":
                 else:
                     print(f"Vehicle file not found: {vehicle_file}")
                     vehicle_weight_results = None
+
+                # Run combined weighting analysis if the module is available
+                if WEIGHTING_AVAILABLE:
+                    print("\n" + "="*60)
+                    print("RUNNING COMBINED WEIGHTING ANALYSIS")
+                    print("="*60)
+                    
+                    try:
+                        # Process combined weights (building + vehicle)
+                        combined_results = process_combined_weights(
+                            output_directory=output_weighted_dir,
+                            buildings_file=buildings_file,
+                            vehicle_file=vehicle_file
+                        )
+                        
+                        if combined_results is not None:
+                            print("Combined weighting analysis (building + vehicle) completed successfully!")
+                        else:
+                            print("Combined weighting analysis failed")
+                            
+                    except Exception as e:
+                        print(f"Error in combined weighting: {e}")
+                        
+                    try:
+                        # Process EV combined weights (building + EV vehicle)
+                        ev_combined_results = process_ev_combined_weights(
+                            output_directory=output_weighted_dir,
+                            buildings_file=buildings_file,
+                            ev_vehicle_file=ev_vehicle_file
+                        )
+                        
+                        if ev_combined_results is not None:
+                            print("EV combined weighting analysis (building + EV vehicle) completed successfully!")
+                        else:
+                            print("EV combined weighting analysis failed")
+                            
+                    except Exception as e:
+                        print(f"Error in EV combined weighting: {e}")
+                        
+                    try:
+                        # Process household income combined weights
+                        income_combined_results = process_household_income_combined_weights(
+                            output_directory=output_weighted_dir,
+                            buildings_file=buildings_file,
+                            income_file=income_file
+                        )
+                        
+                        if income_combined_results is not None:
+                            print("Household income combined weighting analysis completed successfully!")
+                        else:
+                            print("Household income combined weighting analysis failed")
+                            
+                    except Exception as e:
+                        print(f"Error in household income combined weighting: {e}")
+                        
+                else:
+                    print("Weighting combination module not available - skipping combined analysis")
                 
             else:
                 print("No suitable point locations found for weighting analysis")
@@ -273,3 +330,7 @@ if __name__ == "__main__":
     print("ANALYSIS COMPLETE")
     print("=" * 60)
     print("Check the 'output' and 'Output_Weighted' directories for results.")
+    print("Expected combined weight files:")
+    print("- combined_weighted_ev_locations.gpkg")
+    print("- ev_combined_weighted_ev_locations.gpkg") 
+    print("- household_income_combined_weighted_ev_locations.gpkg")
