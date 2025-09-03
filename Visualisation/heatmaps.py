@@ -1,5 +1,5 @@
 # heatmaps.py
-# Heat maps with 12-bin scales (custom max per dataset) — legends always show all 12.
+# Heat maps with 8-bin scales (custom max per dataset) — legends always show all 8.
 
 import os
 import warnings
@@ -27,8 +27,8 @@ BASEMAP = cx.providers.OpenStreetMap.Mapnik
 WEB_MERCATOR = 3857
 
 
-# Make 12 bins and readable labels
-def make_bins(max_val, n_groups=12, decimals=3, label_offset=0.001):
+# Make 8 bins and readable labels
+def make_bins(max_val, n_groups=8, decimals=3, label_offset=0.001):
     """
     Create 'n_groups' bins from 0 to max_val inclusive.
     Labels are 'lo–hi'; except the first bin, add a small offset to 'lo'
@@ -43,132 +43,227 @@ def make_bins(max_val, n_groups=12, decimals=3, label_offset=0.001):
     return edges, labels
 
 
-# --- UPDATED: Blue → Red with lighter low-end blues + subtle extra separation ---
-def blue_to_red_cmap(n):
+# Red colormap - lighter shades for smaller values, darker for bigger values
+def red_cmap(n):
     """
-    Blue → Red with a lighter (but still visible) starting blue and a gentle
-    ease so the first few blue bins differ more clearly.
+    Red colormap with lighter shades for smaller values and darker shades for larger values.
     """
-    start_blue = np.array([135, 180, 255]) / 255.0  # ~ #87B4FF (light, not white)
-    end_red    = np.array([220,  33,  39]) / 255.0  # ~ #DC2127
-
+    # Light red to dark red
+    start_red = np.array([255, 200, 200]) / 255.0  # Light red
+    end_red = np.array([139, 0, 0]) / 255.0        # Dark red
+    
     t = np.linspace(0.0, 1.0, n)
-    t = t ** 0.85  # lower -> stronger separation among early (blue) bins
-
-    cols = start_blue + (end_red - start_blue) * t[:, None]
+    cols = start_red + (end_red - start_red) * t[:, None]
     return ListedColormap(cols)
 
 
-def plot_ranked_points(gpkg_path, value_col, title, out_png, max_val, n_groups=12):
-    # Bins + labels (always 12)
-    bin_edges, labels = make_bins(max_val=max_val, n_groups=n_groups)
-    cmap = blue_to_red_cmap(len(labels))
-
-    full_path = os.path.join(DATA_DIR, gpkg_path)
-    if not os.path.exists(full_path):
-        raise FileNotFoundError(f"Could not find: {full_path}")
-
-    gdf = gpd.read_file(full_path)
-    if gdf.empty:
-        raise ValueError(f"No data in {full_path}")
-    if value_col not in gdf.columns:
-        raise KeyError(f"Column '{value_col}' not found. Available: {list(gdf.columns)}")
-
-    # Clean + clip and bin
-    vals = pd.to_numeric(gdf[value_col], errors="coerce").clip(lower=0, upper=max_val)
-    gdf = gdf.assign(_val=vals).dropna(subset=["_val"]).copy()
-    gdf["_bin"] = pd.cut(gdf["_val"], bins=bin_edges, labels=labels,
-                         include_lowest=True, right=True)
-
-    # CRS
-    if gdf.crs is None:
-        warnings.warn("Input has no CRS. Assuming EPSG:4326")
-        gdf = gdf.set_crs(4326)
-    gdf_3857 = gdf.to_crs(WEB_MERCATOR)
-
-    # Plot points (group by bin)
-    fig, ax = plt.subplots(figsize=FIGSIZE)
-    for i, lab in enumerate(labels):
-        sel = gdf_3857[gdf_3857["_bin"] == lab]
-        if not sel.empty:
-            ax.scatter(
-                sel.geometry.x, sel.geometry.y,
-                s=POINT_SIZE, c=[cmap(i)], alpha=POINT_ALPHA,
-                linewidths=0
-            )
-
-    # Basemap
+def plot_ranked_points(gpkg_path, value_col, title, out_png, max_val, n_groups=8):
+    """
+    Plot ranked points from a GPKG file with comprehensive error handling.
+    Returns True if successful, False if failed.
+    """
     try:
-        cx.add_basemap(ax, source=BASEMAP, crs=f"EPSG:{WEB_MERCATOR}")
+        # Bins + labels (always 8)
+        bin_edges, labels = make_bins(max_val=max_val, n_groups=n_groups)
+        cmap = red_cmap(len(labels))
+
+        full_path = os.path.join(DATA_DIR, gpkg_path)
+        if not os.path.exists(full_path):
+            print(f"❌ SKIPPED: File not found - {gpkg_path}")
+            print(f"   Looking for: {full_path}")
+            return False
+
+        print(f"📊 Processing: {gpkg_path}")
+        gdf = gpd.read_file(full_path)
+        
+        if gdf.empty:
+            print(f"❌ SKIPPED: No data in {gpkg_path}")
+            return False
+            
+        if value_col not in gdf.columns:
+            print(f"❌ SKIPPED: Column '{value_col}' not found in {gpkg_path}")
+            print(f"   Available columns: {list(gdf.columns)}")
+            return False
+
+        # Clean + clip and bin
+        vals = pd.to_numeric(gdf[value_col], errors="coerce").clip(lower=0, upper=max_val)
+        gdf = gdf.assign(_val=vals).dropna(subset=["_val"]).copy()
+        
+        if gdf.empty:
+            print(f"❌ SKIPPED: No valid data after cleaning in {gpkg_path}")
+            return False
+            
+        gdf["_bin"] = pd.cut(gdf["_val"], bins=bin_edges, labels=labels,
+                             include_lowest=True, right=True)
+
+        # CRS
+        if gdf.crs is None:
+            warnings.warn("Input has no CRS. Assuming EPSG:4326")
+            gdf = gdf.set_crs(4326)
+        gdf_3857 = gdf.to_crs(WEB_MERCATOR)
+
+        # Plot points (group by bin)
+        fig, ax = plt.subplots(figsize=FIGSIZE)
+        for i, lab in enumerate(labels):
+            sel = gdf_3857[gdf_3857["_bin"] == lab]
+            if not sel.empty:
+                ax.scatter(
+                    sel.geometry.x, sel.geometry.y,
+                    s=POINT_SIZE, c=[cmap(i)], alpha=POINT_ALPHA,
+                    linewidths=0
+                )
+
+        # Basemap
+        try:
+            cx.add_basemap(ax, source=BASEMAP, crs=f"EPSG:{WEB_MERCATOR}")
+        except Exception as e:
+            warnings.warn(f"Basemap failed to load ({e}).")
+
+        ax.set_title(title, **MAP_TITLE_FONT)
+        ax.set_axis_off()
+        ax.set_aspect("equal")
+        if not gdf_3857.empty:
+            x0, y0, x1, y1 = gdf_3857.total_bounds
+            ax.set_xlim(x0 - 50, x1 + 50)
+            ax.set_ylim(y0 - 50, y1 + 50)
+
+        # --- ALWAYS show 8 legend entries ---
+        handles = [
+            Line2D([0], [0], marker='o', linestyle='',
+                   markerfacecolor=cmap(i), markeredgecolor=cmap(i),
+                   markersize=6, label=lab)
+            for i, lab in enumerate(labels)
+        ]
+        
+        # Enhanced legend with basemap feature descriptions
+        legend_title = f"Value rank (8 groups, 0–{max_val})\n\nBasemap features:\n• Yellow triangles: Peaks/High Points\n• Lines: Roads and Highways"
+        
+        ax.legend(
+            handles=handles,
+            title=legend_title,
+            loc="lower left", bbox_to_anchor=(0.01, 0.01),
+            ncol=2, frameon=True, fontsize=8, title_fontsize=9, markerscale=1.2
+        )
+
+        plt.tight_layout()
+        out_path = os.path.join(OUT_DIR, out_png)
+        plt.savefig(out_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        print(f"✅ Saved: {out_path}")
+        return True
+        
     except Exception as e:
-        warnings.warn(f"Basemap failed to load ({e}).")
-
-    ax.set_title(title, **MAP_TITLE_FONT)
-    ax.set_axis_off()
-    ax.set_aspect("equal")
-    if not gdf_3857.empty:
-        x0, y0, x1, y1 = gdf_3857.total_bounds
-        ax.set_xlim(x0 - 50, x1 + 50)
-        ax.set_ylim(y0 - 50, y1 + 50)
-
-    # --- ALWAYS show 12 legend entries ---
-    handles = [
-        Line2D([0], [0], marker='o', linestyle='',
-               markerfacecolor=cmap(i), markeredgecolor=cmap(i),
-               markersize=6, label=lab)
-        for i, lab in enumerate(labels)
-    ]
-    ax.legend(
-        handles=handles,
-        title=f"Value rank (12 groups, 0–{max_val})",
-        loc="lower left", bbox_to_anchor=(0.01, 0.01),
-        ncol=2, frameon=True, fontsize=8, title_fontsize=9, markerscale=1.2
-    )
-
-    plt.tight_layout()
-    out_path = os.path.join(OUT_DIR, out_png)
-    plt.savefig(out_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Saved: {out_path}")
+        print(f"❌ ERROR processing {gpkg_path}: {str(e)}")
+        return False
 
 
-# ---- Run directly ----
-# A) Combined (max=0.32) — 12 groups
-plot_ranked_points(
-    gpkg_path="combined_weighted_ev_locations.gpkg",
-    value_col="combined_weight",
-    title="Spatial Distribution: Suitable EV Charging Locations based on Cars",
-    out_png="heatmap_combined_weighted.png",
-    max_val=0.32,
-    n_groups=12
-)
+def validate_files(datasets):
+    """
+    Validate all required files exist before processing.
+    Returns lists of existing and missing files.
+    """
+    existing_files = []
+    missing_files = []
+    
+    for dataset in datasets:
+        gpkg_path = dataset["gpkg_path"]
+        full_path = os.path.join(DATA_DIR, gpkg_path)
+        if os.path.exists(full_path):
+            existing_files.append(dataset)
+        else:
+            missing_files.append(gpkg_path)
+    
+    return existing_files, missing_files
 
-# B) EV-Combined (max=0.32) — 12 groups
-plot_ranked_points(
-    gpkg_path="ev_combined_weighted_ev_locations.gpkg",
-    value_col="ev_combined_weight",
-    title="Spatial Distribution: Suitable EV Charging Locations based on EVs",
-    out_png="heatmap_ev_combined_weighted.png",
-    max_val=0.32,
-    n_groups=12
-)
 
-# C) S2 All Vehicles × Income (max=0.20) — 12 groups
-plot_ranked_points(
-    gpkg_path="s2_household_income_combined_all_vehicles_core.gpkg",
-    value_col="s2_all_vehicles_income_combined",
-    title="Spatial Distribution: Suitable EV Charging Locations - Income & Cars",
-    out_png="C4_s2_heatmap_all.png",
-    max_val=0.20,
-    n_groups=12
-)
+# ---- Dataset Configuration ----
+DATASETS = [
+    {
+        "gpkg_path": "s3_1_primary_combined_all_vehicles.gpkg",
+        "value_col": "combined_weight",
+        "title": "Spatial Distribution: Suitable EV Charging - Primary Substation & Cars",
+        "out_png": "C4_s3_1_all_heatmap.png",
+        "max_val": 0.21
+    },
+    {
+        "gpkg_path": "s3_1_primary_combined_ev_vehicles.gpkg",
+        "value_col": "ev_combined_weight",
+        "title": "Spatial Distribution: Suitable EV Charging - Primary Substation & EVs",
+        "out_png": "C4_s3_1_ev_heatmap.png",
+        "max_val": 0.20
+    },
+    {
+        "gpkg_path": "s3_2_secondary_combined_all_vehicles.gpkg",  # Fixed: changed from "primary" to "secondary"
+        "value_col": "combined_weight",
+        "title": "Spatial Distribution: Suitable EV Charging - Secondary Substation & Cars",  # Updated title
+        "out_png": "C4_s3_2_all_heatmap.png",
+        "max_val": 0.12
+    },
+    {
+        "gpkg_path": "s3_2_secondary_combined_ev_vehicles.gpkg",  # Fixed: changed from "primary" to "secondary"
+        "value_col": "ev_combined_weight",
+        "title": "Spatial Distribution: Suitable EV Charging - Secondary Substation & EVs",  # Updated title
+        "out_png": "C4_s3_2_ev_heatmap.png",
+        "max_val": 0.07
+    },
+    {
+        "gpkg_path": "s3_3_primary&secondary_combined_all_vehicles.gpkg",
+        "value_col": "combined_weight",
+        "title": "Spatial Distribution: Suitable EV Charging - Combined Substation & Cars",
+        "out_png": "C4_s3_3_all_heatmap.png",
+        "max_val": 0.21
+    },
+    {
+        "gpkg_path": "s3_3_primary&secondary_combined_ev_vehicles.gpkg",
+        "value_col": "ev_combined_weight",
+        "title": "Spatial Distribution: Suitable EV Charging - Combined Substation & EVs",
+        "out_png": "C4_s3_3_ev_heatmap.png",
+        "max_val": 0.20
+    }
+]
 
-# D) S2 EV Vehicles × Income (max=0.18) — 12 groups
-plot_ranked_points(
-    gpkg_path="s2_household_income_combined_ev_vehicles_core.gpkg",
-    value_col="s2_ev_vehicles_income_combined",
-    title="Spatial Distribution: Suitable EV Charging Locations - Income & EVs",
-    out_png="C4_s2_heatmap_ev.png",
-    max_val=0.18,
-    n_groups=12
-)
+
+# ---- Main Execution ----
+if __name__ == "__main__":
+    print(f"🔍 Checking data directory: {DATA_DIR}")
+    print(f"📂 Output directory: {OUT_DIR}")
+    print("=" * 60)
+    
+    # Validate files first
+    existing_files, missing_files = validate_files(DATASETS)
+    
+    if missing_files:
+        print("⚠️  MISSING FILES:")
+        for missing_file in missing_files:
+            print(f"   • {missing_file}")
+        print()
+    
+    if existing_files:
+        print(f"📋 Processing {len(existing_files)} available datasets...")
+        print()
+        
+        successful = 0
+        failed = 0
+        
+        for dataset in existing_files:
+            success = plot_ranked_points(
+                gpkg_path=dataset["gpkg_path"],
+                value_col=dataset["value_col"],
+                title=dataset["title"],
+                out_png=dataset["out_png"],
+                max_val=dataset["max_val"],
+                n_groups=8
+            )
+            
+            if success:
+                successful += 1
+            else:
+                failed += 1
+        
+        print("=" * 60)
+        print(f"📊 SUMMARY: {successful} successful, {failed} failed, {len(missing_files)} missing")
+        
+    else:
+        print("❌ No valid datasets found to process!")
+        
+    print("🏁 Process completed.")
