@@ -14,13 +14,27 @@ try:
     from Optimal_Locations.vehicle_weights import process_vehicle_weights
     from Optimal_Locations.ev_vehicle_weights import process_ev_vehicle_weights
     from Optimal_Locations.household_income_weights import process_household_income_weights
+    from Optimal_Locations.primary_secondary_substation_weights import (
+        process_substation_weights, 
+        process_combined_substation_weights  # NEW: Import the combined function
+    )
+    from Optimal_Locations.combined_substation_weights import process_combined_substation_weight_multiplication  # NEW: Import multiplication function
 except ImportError as e:
     print(f"Import error: {e}")
     print("Some modules may be missing. The script will continue with available functionality.")
 
 # Try to import weighting combination modules
 try:
-    from Optimal_Locations.weighting_ev_locations import process_combined_weights, process_ev_combined_weights
+    from Optimal_Locations.weighting_ev_locations import (
+        process_combined_weights, 
+        process_ev_combined_weights,
+        process_primary_substation_combined_weights,
+        process_primary_substation_ev_combined_weights, 
+        process_secondary_substation_combined_weights,
+        process_secondary_substation_ev_combined_weights,
+        process_primary_secondary_combined_substation_weights,  # NEW IMPORT
+        process_primary_secondary_ev_combined_substation_weights  # NEW IMPORT
+    )
     from Optimal_Locations.core_and_income import process_s2_core_and_income_weights, process_s2_ev_core_and_income_weights
     WEIGHTING_AVAILABLE = True
 except ImportError:
@@ -72,6 +86,10 @@ if __name__ == "__main__":
     vehicle_file = os.path.join(data_dir, "wcr_Total_Cars_2011_LSOA.gpkg")
     ev_vehicle_file = os.path.join(data_dir, "wcr_ev_vehicle_count.gpkg")
     income_file = os.path.join(data_dir, "wcr_Income_MSOA.gpkg")
+    
+    # NEW: Substation data files
+    primary_substation_file = os.path.join(data_dir, "wcr_primary_substation_demand.gpkg")
+    secondary_substation_file = os.path.join(data_dir, "wcr_secondary_substation_demand.gpkg")
 
     # STEP 0.5: Process EV vehicle data if it doesn't exist
     print("\n" + "=" * 60)
@@ -242,6 +260,78 @@ if __name__ == "__main__":
                 else:
                     print(f"Vehicle file not found: {vehicle_file}")
 
+                # NEW: Run substation weighting analysis
+                substation_weight_results = None
+                combined_substation_weight_results = None
+                if os.path.exists(primary_substation_file) and os.path.exists(secondary_substation_file):
+                    print("\n" + "="*60)
+                    print("RUNNING SUBSTATION WEIGHTING ANALYSIS")
+                    print("="*60)
+                    
+                    try:
+                        substation_weight_results = process_substation_weights(
+                            suitable_ev_locations_file=suitable_locations_file,
+                            primary_substation_data_file=primary_substation_file,
+                            secondary_substation_data_file=secondary_substation_file,
+                            output_dir=output_weighted_dir
+                        )
+                        
+                        if substation_weight_results is not None:
+                            print("Substation weighting analysis completed successfully!")
+                            
+                            # NEW: Create the combined substation weights file with combined_substation_weight column
+                            print("\n" + "="*60)
+                            print("CREATING COMBINED SUBSTATION WEIGHTS")
+                            print("="*60)
+                            
+                            try:
+                                combined_substation_weight_results = process_combined_substation_weights(
+                                    suitable_ev_locations_file=suitable_locations_file,
+                                    primary_substation_data_file=primary_substation_file,
+                                    secondary_substation_data_file=secondary_substation_file,
+                                    output_dir=output_weighted_dir
+                                )
+                                
+                                if combined_substation_weight_results is not None:
+                                    print("Combined substation weighting analysis completed successfully!")
+                                    
+                                    # NEW: Run the specific multiplication function requested
+                                    print("\n" + "="*60)
+                                    print("PROCESSING COMBINED SUBSTATION WEIGHT MULTIPLICATION")
+                                    print("="*60)
+                                    
+                                    try:
+                                        multiplication_results = process_combined_substation_weight_multiplication(
+                                            input_file=os.path.join(output_weighted_dir, "primary&secondary_weights.gpkg"),
+                                            output_dir=output_weighted_dir
+                                        )
+                                        
+                                        if multiplication_results is not None:
+                                            print("Combined substation weight multiplication completed successfully!")
+                                        else:
+                                            print("Combined substation weight multiplication failed")
+                                    
+                                    except Exception as e:
+                                        print(f"Error in combined substation weight multiplication: {e}")
+                                        
+                                else:
+                                    print("Combined substation weighting analysis failed")
+                                    
+                            except Exception as e:
+                                print(f"Error in combined substation weighting: {e}")
+                                combined_substation_weight_results = None
+                        else:
+                            print("Substation weighting analysis failed")
+                            
+                    except Exception as e:
+                        print(f"Error in substation weighting: {e}")
+                        substation_weight_results = None
+                else:
+                    if not os.path.exists(primary_substation_file):
+                        print(f"Primary substation file not found: {primary_substation_file}")
+                    if not os.path.exists(secondary_substation_file):
+                        print(f"Secondary substation file not found: {secondary_substation_file}")
+
                 # Run combined weighting analysis if the module is available
                 if WEIGHTING_AVAILABLE:
                     print("\n" + "="*60)
@@ -253,6 +343,9 @@ if __name__ == "__main__":
                     vehicle_weighted_file = os.path.join(output_weighted_dir, "vehicle_weights.gpkg")
                     ev_vehicle_weighted_file = os.path.join(output_weighted_dir, "ev_vehicle_weights.gpkg")
                     household_income_weighted_file = os.path.join(output_weighted_dir, "household_income_weights.gpkg")
+                    primary_substation_weighted_file = os.path.join(output_weighted_dir, "primary_substation_weights.gpkg")
+                    secondary_substation_weighted_file = os.path.join(output_weighted_dir, "secondary_substation_weights.gpkg")
+                    combined_substation_weighted_file = os.path.join(output_weighted_dir, "combined_substation_weight.gpkg")  # NEW: Updated to use the new file
                     
                     # Process combined weights (building + vehicle) - FIXED PARAMETERS
                     combined_results = None
@@ -335,6 +428,135 @@ if __name__ == "__main__":
                             print(f"Error in S2 EV Vehicles Core and Income weighting: {e}")
                     else:
                         print("Skipping S2 EV Vehicles Core and Income weights - missing EV combined weights or household income weights")
+                    
+                    # NEW: S3 STAGE - PRIMARY SUBSTATION COMBINATIONS
+                    print("\n" + "="*60)
+                    print("RUNNING S3 PRIMARY SUBSTATION COMBINATIONS")
+                    print("="*60)
+                    
+                    # S3.1 Primary + All Vehicles Combined
+                    if combined_results is not None and substation_weight_results is not None:
+                        try:
+                            s3_primary_all_results = process_primary_substation_combined_weights(
+                                combined_weighted_file=combined_weighted_file,
+                                primary_substation_file=primary_substation_weighted_file,  # FIXED: Use correct parameter name
+                                output_dir=output_weighted_dir
+                            )
+                            
+                            if s3_primary_all_results is not None:
+                                print("S3.1 Primary + All Vehicles combined weighting completed successfully!")
+                            else:
+                                print("S3.1 Primary + All Vehicles combined weighting failed")
+                                
+                        except Exception as e:
+                            print(f"Error in S3.1 Primary + All Vehicles weighting: {e}")
+                    else:
+                        print("Skipping S3.1 Primary + All Vehicles - missing combined weights or primary substation weights")
+                    
+                    # S3.1 Primary + EV Vehicles Combined
+                    if ev_combined_results is not None and substation_weight_results is not None:
+                        try:
+                            s3_primary_ev_results = process_primary_substation_ev_combined_weights(
+                                ev_combined_weighted_file=ev_combined_weighted_file,
+                                primary_substation_file=primary_substation_weighted_file,  # FIXED: Use correct parameter name
+                                output_dir=output_weighted_dir
+                            )
+                            
+                            if s3_primary_ev_results is not None:
+                                print("S3.1 Primary + EV Vehicles combined weighting completed successfully!")
+                            else:
+                                print("S3.1 Primary + EV Vehicles combined weighting failed")
+                                
+                        except Exception as e:
+                            print(f"Error in S3.1 Primary + EV Vehicles weighting: {e}")
+                    else:
+                        print("Skipping S3.1 Primary + EV Vehicles - missing EV combined weights or primary substation weights")
+                    
+                    # NEW: S3 STAGE - SECONDARY SUBSTATION COMBINATIONS
+                    print("\n" + "="*60)
+                    print("RUNNING S3 SECONDARY SUBSTATION COMBINATIONS")
+                    print("="*60)
+                    
+                    # S3.2 Secondary + All Vehicles Combined
+                    if combined_results is not None and substation_weight_results is not None:
+                        try:
+                            s3_secondary_all_results = process_secondary_substation_combined_weights(
+                                combined_weighted_file=combined_weighted_file,
+                                secondary_substation_file=secondary_substation_weighted_file,  # FIXED: Use correct parameter name
+                                output_dir=output_weighted_dir
+                            )
+                            
+                            if s3_secondary_all_results is not None:
+                                print("S3.2 Secondary + All Vehicles combined weighting completed successfully!")
+                            else:
+                                print("S3.2 Secondary + All Vehicles combined weighting failed")
+                                
+                        except Exception as e:
+                            print(f"Error in S3.2 Secondary + All Vehicles weighting: {e}")
+                    else:
+                        print("Skipping S3.2 Secondary + All Vehicles - missing combined weights or secondary substation weights")
+                    
+                    # S3.2 Secondary + EV Vehicles Combined (Note: This creates the final output from your request)
+                    if ev_combined_results is not None and substation_weight_results is not None:
+                        try:
+                            s3_secondary_ev_results = process_secondary_substation_ev_combined_weights(
+                                ev_combined_weighted_file=ev_combined_weighted_file,
+                                secondary_substation_file=secondary_substation_weighted_file,  # FIXED: Use correct parameter name
+                                output_dir=output_weighted_dir
+                            )
+                            
+                            if s3_secondary_ev_results is not None:
+                                print("S3.2 Secondary + EV Vehicles combined weighting completed successfully!")
+                            else:
+                                print("S3.2 Secondary + EV Vehicles combined weighting failed")
+                                
+                        except Exception as e:
+                            print(f"Error in S3.2 Secondary + EV Vehicles weighting: {e}")
+                    else:
+                        print("Skipping S3.2 Secondary + EV Vehicles - missing EV combined weights or secondary substation weights")
+                    
+                    # NEW: S3.3 STAGE - PRIMARY & SECONDARY COMBINED SUBSTATION COMBINATIONS
+                    print("\n" + "="*60)
+                    print("RUNNING S3.3 PRIMARY & SECONDARY COMBINED SUBSTATION COMBINATIONS")
+                    print("="*60)
+                    
+                    # S3.3 Primary&Secondary Combined + All Vehicles
+                    if combined_results is not None and combined_substation_weight_results is not None:
+                        try:
+                            s3_combined_substation_all_results = process_primary_secondary_combined_substation_weights(
+                                combined_weighted_file=combined_weighted_file,
+                                combined_substation_weighted_file=combined_substation_weighted_file,
+                                output_dir=output_weighted_dir
+                            )
+                            
+                            if s3_combined_substation_all_results is not None:
+                                print("S3.3 Primary&Secondary Combined + All Vehicles weighting completed successfully!")
+                            else:
+                                print("S3.3 Primary&Secondary Combined + All Vehicles weighting failed")
+                                
+                        except Exception as e:
+                            print(f"Error in S3.3 Primary&Secondary Combined + All Vehicles weighting: {e}")
+                    else:
+                        print("Skipping S3.3 Primary&Secondary Combined + All Vehicles - missing combined weights or combined substation weights")
+                    
+                    # S3.3 Primary&Secondary Combined + EV Vehicles
+                    if ev_combined_results is not None and combined_substation_weight_results is not None:
+                        try:
+                            s3_combined_substation_ev_results = process_primary_secondary_ev_combined_substation_weights(
+                                ev_combined_weighted_file=ev_combined_weighted_file,
+                                combined_substation_weighted_file=combined_substation_weighted_file,
+                                output_dir=output_weighted_dir
+                            )
+                            
+                            if s3_combined_substation_ev_results is not None:
+                                print("S3.3 Primary&Secondary Combined + EV Vehicles weighting completed successfully!")
+                            else:
+                                print("S3.3 Primary&Secondary Combined + EV Vehicles weighting failed")
+                                
+                        except Exception as e:
+                            print(f"Error in S3.3 Primary&Secondary Combined + EV Vehicles weighting: {e}")
+                    else:
+                        print("Skipping S3.3 Primary&Secondary Combined + EV Vehicles - missing EV combined weights or combined substation weights")
                         
                 else:
                     print("Weighting combination module not available - skipping combined analysis")
@@ -376,3 +598,16 @@ if __name__ == "__main__":
     print("- ev_combined_weighted_ev_locations.gpkg")
     print("- s2_household_income_combined_all_vehicles_core.gpkg")
     print("- s2_household_income_combined_ev_vehicles_core.gpkg")
+    print("NEW: Expected substation weight files:")
+    print("- primary_substation_weights.gpkg")
+    print("- secondary_substation_weights.gpkg")
+    print("- primary&secondary_weights.gpkg")
+    print("- combined_substation_weight.gpkg (NEW: with combined_substation_weight column)")
+    print("NEW: Expected S3 substation combination files:")
+    print("- s3_1_primary_combined_all_vehicles.gpkg")
+    print("- s3_1_primary_combined_ev_vehicles.gpkg")
+    print("- s3_2_secondary_combined_all_vehicles.gpkg")
+    print("- s3_2_secondary_combined_ev_vehicles.gpkg")
+    print("NEW: Expected S3.3 Primary&Secondary combined files:")
+    print("- s3_3_primary&secondary_combined_all_vehicles.gpkg")
+    print("- s3_3_primary&secondary_combined_ev_vehicles.gpkg")
