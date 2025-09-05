@@ -29,10 +29,10 @@ DATASETS = [
      "Scenario 1 (EV): EV-Combined Normalised Distribution", 0.18),
     ("s2_household_income_combined_all_vehicles_core.gpkg", "s2_all_vehicles_income_combined",
      "C4_s2_all_income_LSOA_distribution.png", 
-     "Scenario 2 (All Car Types × Income): Distribution", 0.32),
+     "Scenario 2 (All Car Types × Income): Distribution", 0.20),
     ("s2_household_income_combined_ev_vehicles_core.gpkg", "s2_ev_vehicles_income_combined",
      "C4_s2_ev_income_LSOA_distribution.png", 
-     "Scenario 2 (EV × Income): Distribution", 0.32),
+     "Scenario 2 (EV × Income): Distribution", 0.18),
     
     # NEW Scenario 3 datasets
     ("s3_1_primary_combined_all_vehicles.gpkg", "s3_1_primary_combined_all_vehicles_weight",
@@ -41,38 +41,6 @@ DATASETS = [
     ("s3_1_primary_combined_ev_vehicles.gpkg", "s3_1_primary_combined_ev_vehicles_weight",
      "C4_s3_1_ev.png",
      "Scenario 3 (EV x Primary Substation Capacity): Distribution", 0.20),
-    ("s3_2_secondary_combined_all_vehicles.gpkg", "s3_2_secondary_combined_all_vehicles_weight",
-     "C4_s3_2_all.png",
-     "Scenario 3 (All Car Types x Secondary Substation Capacity): Distribution", 0.12),
-    ("s3_2_secondary_combined_ev_vehicles.gpkg", "s3_2_secondary_combined_ev_vehicles_weight",
-     "C4_s3_2_ev.png",
-     "Scenario 3 (EV x Secondary Substation Capacity): Distribution", 0.07),
-    ("s3_3_primary&secondary_combined_all_vehicles.gpkg", "s3_3_primary_secondary_combined_all_vehicles_weight",
-     "C4_s3_3_all.png",
-     "Scenario 3 (All Car Types x Combined Substation Capacity): Distribution", 0.21),
-    ("s3_3_primary&secondary_combined_ev_vehicles.gpkg", "s3_3_primary_secondary_ev_vehicles_weight",
-     "C4_s3_3_ev.png",
-     "Scenario 3 (EV x Combined Substation Capacity): Distribution", 0.20),
-]
-
-# ---- Cumulative Distribution Configuration ----
-# These are specifically for the cumulative distribution plot
-CUMULATIVE_DATASETS = [
-    # Existing datasets
-    ("combined_weighted_ev_locations.gpkg", "combined_weight",
-     "Scenario 1 (All Car Types): Combined Normalised"),
-    ("ev_combined_weighted_ev_locations.gpkg", "ev_combined_weight",
-     "Scenario 1 (EV): EV-Combined Normalised"),
-    ("s2_household_income_combined_all_vehicles_core.gpkg", "s2_all_vehicles_income_combined",
-     "Scenario 2 (All Car Types × Income)"),
-    ("s2_household_income_combined_ev_vehicles_core.gpkg", "s2_ev_vehicles_income_combined",
-     "Scenario 2 (EV × Income)"),
-    
-    # NEW datasets for cumulative plot
-    ("s3_3_primary&secondary_combined_all_vehicles.gpkg", "s3_3_primary_secondary_combined_all_vehicles_weight",
-     "Scenario 3 (All Car Types x Combined Substations)"),
-    ("s3_3_primary&secondary_combined_ev_vehicles.gpkg", "s3_3_primary_secondary_ev_vehicles_weight",
-     "Scenario 3 (EV x Combined Substations)"),
 ]
 
 def load_dataset_values(points_path: Path, value_col: str) -> pd.Series:
@@ -190,7 +158,6 @@ def create_violin_plot(values: pd.Series, title: str, max_val: float, output_pat
     plt.close()
     print(f"Saved violin plot: {output_path}")
 
-
 def create_comparison_plot(all_data: dict, output_path: Path):
     """Create comparison plot showing all distributions together with 2 columns layout."""
     n_datasets = len(all_data)
@@ -214,172 +181,8 @@ def create_comparison_plot(all_data: dict, output_path: Path):
 
     axes = axes.flatten()
 
-    colors = ['skyblue', 'lightcoral', 'lightgreen', 'plum', 'orange', 'pink',
-              'lightgray', 'gold', 'lightcyan', 'wheat', 'lavender', 'peachpuff']
-
-    # Store legend information
-    legend_elements = []
-
-    for i, (key, (values, title, max_val)) in enumerate(all_data.items()):
-        if i >= len(axes):
-            break
-
-        ax = axes[i]
-        color = colors[i % len(colors)]
-
-        # Histogram with KDE
-        n, bins, patches = ax.hist(values, bins=40, density=True, alpha=0.7,
-                                   color=color, edgecolor='black', linewidth=0.5,
-                                   label=f'Histogram')
-
-        # KDE overlay
-        ax2 = ax.twinx()
-        kde_line = values.plot.kde(ax=ax2, color='red', linewidth=2, alpha=0.8)
-        ax2.set_ylabel('')
-        ax2.set_yticks([])
-
-        # Styling
-        ax.set_xlabel('Normalised Value', fontsize=11)
-        ax.set_ylabel('Frequency', fontsize=11)
-        ax.set_title(title, fontsize=11, fontweight='bold', wrap=True)
-        ax.set_xlim(0, max_val * 1.1)
-        ax.grid(True, alpha=0.3)
-
-        # Add key statistics in top-left corner
-        stats = f"n={len(values):,}\nμ={values.mean():.3f}\nσ={values.std():.3f}"
-        ax.text(0.02, 0.98, stats, transform=ax.transAxes,
-                verticalalignment='top', bbox=dict(boxstyle='round',
-                                                   facecolor='white', alpha=0.8), fontsize=9)
-
-        # Add to legend (simplified title for legend)
-        legend_label = title.split(':')[0] if ':' in title else title
-        legend_elements.append(plt.Rectangle((0, 0), 1, 1, facecolor=color,
-                                             edgecolor='black', alpha=0.7,
-                                             label=legend_label))
-
-    # Hide unused subplots
-    for j in range(len(all_data), len(axes)):
-        axes[j].set_visible(False)
-
-    # Add main title
-    plt.suptitle('EV Charger Location Normalised Distributions - All Scenarios',
-                 fontsize=16, fontweight='bold', y=0.95)
-
-    # Add legend on the right side of the figure
-    fig.legend(handles=legend_elements, loc='center right', bbox_to_anchor=(0.98, 0.5),
-               fontsize=10, title='Scenarios', title_fontsize=12)
-
-    # Adjust layout to make room for legend
-    plt.tight_layout()
-    plt.subplots_adjust(right=0.85)  # Make room for legend on right
-
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved comparison plot: {output_path}")
-
-
-def create_cumulative_plot(cumulative_data: dict, output_path: Path):
-    """Create cumulative distribution function (CDF) plots for comparison."""
-    if not cumulative_data:
-        print("No cumulative data available for plotting")
-        return
-
-    fig, ax = plt.subplots(figsize=(12, 8))
-
-    # Colors for different datasets
-    colors = ['blue', 'red', 'green', 'purple', 'orange', 'brown', 'pink', 'gray']
-
-    for i, (key, (values, title)) in enumerate(cumulative_data.items()):
-        color = colors[i % len(colors)]
-
-        # Sort values for CDF
-        sorted_values = np.sort(values)
-        n = len(sorted_values)
-
-        # Create cumulative probabilities (0 to 1)
-        cumulative_probs = np.arange(1, n + 1) / n
-
-        # Plot the CDF
-        ax.plot(sorted_values, cumulative_probs,
-                color=color, linewidth=2.5, alpha=0.8,
-                label=title, marker='o', markersize=2, markevery=max(1, n // 50))
-
-        # Add some statistics
-        mean_val = values.mean()
-        median_val = values.median()
-
-        # Mark median on the plot
-        median_prob = 0.5
-        ax.axvline(median_val, color=color, linestyle='--', alpha=0.5)
-        ax.plot(median_val, median_prob, 'o', color=color, markersize=8,
-                markerfacecolor='white', markeredgecolor=color, markeredgewidth=2)
-
-    # Formatting
-    ax.set_xlabel('Normalised Suitability Value', fontsize=12)
-    ax.set_ylabel('Cumulative Probability', fontsize=12)
-    ax.set_title('Cumulative Distribution Functions (CDFs) - Suitability Comparison',
-                 fontsize=14, fontweight='bold', pad=20)
-
-    # Set y-axis to show full probability range
-    ax.set_ylim(0, 1)
-    ax.set_xlim(left=0)
-
-    # Add grid
-    ax.grid(True, alpha=0.3)
-
-    # Add legend
-    ax.legend(loc='center right', bbox_to_anchor=(1.25, 0.5), fontsize=10)
-
-    # Add reference lines
-    ax.axhline(0.5, color='black', linestyle=':', alpha=0.5, label='Median (50th percentile)')
-    ax.axhline(0.25, color='gray', linestyle=':', alpha=0.3)
-    ax.axhline(0.75, color='gray', linestyle=':', alpha=0.3)
-
-    # Add explanation text
-    explanation = ("CDF shows the probability that a location has suitability ≤ x\n" +
-                   "• Curves shifted right = better overall suitability\n" +
-                   "• Steeper curves = values more concentrated\n" +
-                   "• Dashed lines show median values for each scenario")
-
-    ax.text(0.02, 0.98, explanation, transform=ax.transAxes,
-            verticalalignment='top', bbox=dict(boxstyle='round',
-                                               facecolor='lightyellow', alpha=0.8),
-            fontsize=9)
-
-    # Adjust layout
-    plt.tight_layout()
-    plt.subplots_adjust(right=0.8)  # Make room for legend
-
-    # Save the plot
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved cumulative distribution plot: {output_path}")
-
-def create_comparison_plot(all_data: dict, output_path: Path):
-    """Create comparison plot showing all distributions together with 2 columns layout."""
-    n_datasets = len(all_data)
-
-    # Always use 2 columns layout for better spacing
-    n_cols = 2
-    n_rows = (n_datasets + 1) // 2  # Round up division
-
-    # Adjust figure size based on number of rows
-    fig_width = 16  # Fixed width for 2 columns
-    fig_height = max(8, n_rows * 4)  # Minimum 8, scale with rows
-
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_width, fig_height))
-
-    # Handle case where we have only one row
-    if n_rows == 1:
-        axes = axes.reshape(1, -1)
-    # Handle case where we have only one subplot total
-    elif n_datasets == 1:
-        axes = np.array([[axes]])
-
-    axes = axes.flatten()
-
-    colors = ['skyblue', 'lightcoral', 'lightgreen', 'plum', 'orange', 'pink',
-              'lightgray', 'gold', 'lightcyan', 'wheat', 'lavender', 'peachpuff']
+    # Updated colors array for 6 datasets (removed 4 colors since you removed 4 datasets)
+    colors = ['skyblue', 'lightcoral', 'lightgreen', 'plum', 'orange', 'pink']
 
     for i, (key, (values, title, max_val)) in enumerate(all_data.items()):
         if i >= len(axes):
@@ -408,10 +211,11 @@ def create_comparison_plot(all_data: dict, output_path: Path):
         ax.set_xlim(0, max_val * 1.1)
         ax.grid(True, alpha=0.3)
 
-        # Add key statistics in top-left corner
+        # Move key statistics to RIGHT side to avoid blocking data
         stats = f"n={len(values):,}\nμ={values.mean():.3f}\nσ={values.std():.3f}"
         ax.text(
-            0.02, 0.98, stats, transform=ax.transAxes, verticalalignment='top',
+            0.98, 0.98, stats, transform=ax.transAxes, 
+            verticalalignment='top', horizontalalignment='right',
             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=9
         )
 
@@ -447,7 +251,6 @@ def create_comparison_plot(all_data: dict, output_path: Path):
     plt.close()
     print(f"Saved comparison plot: {output_path}")
 
-
 def main():
     """Process each dataset and create distribution plots."""
     print("=" * 80)
@@ -457,7 +260,6 @@ def main():
     print(f"Output directory: {OUT_DIR}")
     
     all_data = {}
-    cumulative_data = {}
     successful_datasets = 0
     
     # Process all individual datasets
@@ -499,27 +301,6 @@ def main():
             print(f"✗ Error processing {gpkg}: {e}")
             continue
     
-    # Process cumulative datasets separately
-    print(f"\n📈 LOADING DATA FOR CUMULATIVE DISTRIBUTION PLOT")
-    print("-" * 50)
-    for gpkg, valcol, title in CUMULATIVE_DATASETS:
-        try:
-            points_path = OUTW_DIR / gpkg
-            if points_path.exists():
-                values = load_dataset_values(points_path, valcol)
-                
-                if len(values) > 0:
-                    cumulative_data[gpkg] = (values, title)
-                    print(f"✓ Loaded {gpkg} for cumulative plot")
-                else:
-                    print(f"✗ No valid data for cumulative plot: {gpkg}")
-            else:
-                print(f"✗ File not found for cumulative plot: {gpkg}")
-                
-        except Exception as e:
-            print(f"✗ Error loading {gpkg} for cumulative plot: {e}")
-            continue
-    
     # Create comparison plots if we have data
     if all_data:
         print(f"\n🎨 CREATING COMPARISON VISUALIZATIONS")
@@ -529,19 +310,11 @@ def main():
         comparison_path = OUT_DIR / "C4_all_distributions_comparison.png"
         create_comparison_plot(all_data, comparison_path)
     
-    # Create cumulative distribution plot
-    if cumulative_data:
-        print(f"\n📊 CREATING CUMULATIVE DISTRIBUTION PLOT")
-        print("-" * 45)
-        cumulative_path = OUT_DIR / "C4_cumulative_distributions.png"
-        create_cumulative_plot(cumulative_data, cumulative_path)
-    
     # Final summary
     print("\n" + "=" * 80)
     print("ANALYSIS COMPLETE")
     print("=" * 80)
     print(f"✓ Successfully processed: {successful_datasets}/{len(DATASETS)} individual datasets")
-    print(f"✓ Cumulative data loaded: {len(cumulative_data)}/{len(CUMULATIVE_DATASETS)} datasets")
     print(f"📁 Output files saved to: {OUT_DIR}")
     
     print(f"\n📋 GENERATED VISUALIZATIONS:")
@@ -549,16 +322,6 @@ def main():
     print(f"   • {successful_datasets} Individual violin plots") 
     if all_data:
         print(f"   • 1 Multi-panel comparison plot")
-    if cumulative_data:
-        print(f"   • 1 Cumulative distribution comparison")
-    
-    print(f"\n💡 CUMULATIVE DISTRIBUTION FUNCTION (CDF) EXPLANATION:")
-    print("The CDF shows what percentage of locations have suitability values ≤ x")
-    print("• Steep curves = values concentrated in narrow range")
-    print("• Gradual curves = values spread evenly")
-    print("• Left-shifted curves = more locations with low values")
-    print("• Right-shifted curves = more locations with high values")
-    print("• Better scenarios have curves shifted toward higher values")
 
 if __name__ == "__main__":
     main()

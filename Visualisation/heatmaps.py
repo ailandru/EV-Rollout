@@ -1,5 +1,5 @@
 # heatmaps.py
-# Heat maps with 8-bin scales (custom max per dataset) — legends always show all 8.
+# Heat maps with 10-bin equal count distribution using red color scheme and grey canvas basemap
 
 import os
 import warnings
@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import contextily as cx
 from matplotlib.colors import ListedColormap
 from matplotlib.lines import Line2D
+from matplotlib.patches import FancyArrowPatch
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -23,54 +24,115 @@ MAP_TITLE_FONT = dict(fontsize=14, weight="bold")
 FIGSIZE = (10, 10)
 POINT_SIZE = 10
 POINT_ALPHA = 0.9
-BASEMAP = cx.providers.OpenStreetMap.Mapnik
+# Changed to ESRI canvas basemap
+BASEMAP = cx.providers.Esri.WorldTopoMap
 WEB_MERCATOR = 3857
 
+# Define which datasets should exclude zero values
+S3_DATASETS = [
+    "s3_1_primary_combined_all_vehicles.gpkg",
+    "s3_1_primary_combined_ev_vehicles.gpkg"
+]
 
-# Make 8 bins and readable labels
-def make_bins(max_val, n_groups=8, decimals=3, label_offset=0.001):
+
+def add_north_arrow(ax):
     """
-    Create 'n_groups' bins from 0 to max_val inclusive.
-    Labels are 'lo–hi'; except the first bin, add a small offset to 'lo'
-    so labels read like 0.041–0.060 instead of 0.040–0.060.
+    Add a simple north arrow to the upper right corner of the map.
     """
-    edges = np.linspace(0.0, float(max_val), n_groups + 1)  # precise edges
-    labels = []
+    # Get the current axis limits
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+
+    # Position in upper right corner (as percentages of the axis range)
+    x_pos = xlim[1] - 0.08 * (xlim[1] - xlim[0])  # 8% from right
+    y_pos = ylim[1] - 0.08 * (ylim[1] - ylim[0])  # 8% from top
+
+    # Arrow length (5% of the y-axis range -> bigger than before)
+    arrow_length = 0.05 * (ylim[1] - ylim[0])
+
+    # Create arrow pointing north
+    arrow = FancyArrowPatch(
+        (x_pos, y_pos - arrow_length),
+        (x_pos, y_pos),
+        connectionstyle="arc3",
+        arrowstyle='-|>',  # more prominent arrowhead
+        mutation_scale=40,  # bigger arrowhead
+        color='black',
+        linewidth=3
+    )
+    ax.add_patch(arrow)
+
+    # Add "N" label above the arrow (bigger font size)
+    ax.text(x_pos, y_pos + 0.01 * (ylim[1] - ylim[0]), 'N',
+            ha='center', va='bottom', fontsize=18, fontweight='bold', color='black')
+
+
+def create_equal_count_bins(values, n_groups=10, decimals=4):
+    """
+    Create equal count bins where each bin contains exactly the same number of points.
+    This uses percentiles to ensure exactly 10% of data in each bin.
+    
+    Arguments:
+        values (array): The data values to bin
+        n_groups (int): Number of bins to create (default 10)
+        decimals (int): Number of decimal places for labels
+    
+    Returns:
+        tuple: (bin_labels, percentile_values, bin_assignments)
+    """
+    # Sort values to understand the distribution
+    sorted_values = np.sort(values)
+    n_points = len(sorted_values)
+    points_per_bin = n_points // n_groups
+    
+    print(f"   Creating {n_groups} equal-count bins with ~{points_per_bin} points each")
+    
+    # Calculate percentiles for exactly equal-sized bins
+    percentiles = np.linspace(0, 100, n_groups + 1)
+    bin_edges = np.percentile(values, percentiles)
+    
+    # Create labels showing the actual value ranges for each bin
+    bin_labels = []
     for i in range(n_groups):
-        lo, hi = edges[i], edges[i + 1]
-        lo_lab = 0.0 if i == 0 else lo + label_offset
-        labels.append(f"{lo_lab:.{decimals}f}–{hi:.{decimals}f}")
-    return edges, labels
+        low_val = bin_edges[i]
+        high_val = bin_edges[i + 1]
+        bin_labels.append(f"{low_val:.{decimals}f}–{high_val:.{decimals}f}")
+    
+    # Assign each point to a bin using percentile ranks
+    # This ensures exactly equal counts per bin
+    percentile_ranks = np.searchsorted(bin_edges[1:-1], values, side='left')
+    
+    return bin_labels, bin_edges, percentile_ranks
 
-
-# Red colormap - lighter shades for smaller values, darker for bigger values
 def red_cmap(n):
     """
-    Red colormap with lighter shades for smaller values and darker shades for larger values.
+    Red colormap with lightest red for lowest values (bottom 10%) 
+    and darkest red for highest values (top 10%).
     """
-    # Light red to dark red
-    start_red = np.array([255, 200, 200]) / 255.0  # Light red
-    end_red = np.array([139, 0, 0]) / 255.0        # Dark red
+    colors = []
+    for i in range(n):
+        # Intensity increases from 0 to 1 as we go from lowest to highest values
+        intensity = i / (n - 1) if n > 1 else 0
+        
+        # Light red (255, 200, 200) to dark red (139, 0, 0)
+        r = 1.0 - 0.455 * intensity  # 1.0 to 0.545 (255 to 139 normalized)
+        g = 0.784 - 0.784 * intensity  # 0.784 to 0 (200 to 0 normalized)
+        b = 0.784 - 0.784 * intensity  # 0.784 to 0 (200 to 0 normalized)
+        
+        colors.append([r, g, b])
     
-    t = np.linspace(0.0, 1.0, n)
-    cols = start_red + (end_red - start_red) * t[:, None]
-    return ListedColormap(cols)
+    return ListedColormap(colors)
 
-
-def plot_ranked_points(gpkg_path, value_col, title, out_png, max_val, n_groups=8):
+def plot_ranked_points(gpkg_path, value_col, title, out_png, n_groups=10):
     """
-    Plot ranked points from a GPKG file with comprehensive error handling.
-    Returns True if successful, False if failed.
+    Plot ranked points using equal count distribution with red color scheme.
+    Each bin contains exactly the same number of points (10% each).
+    For S3 datasets, excludes points with values of exactly 0.0000.
     """
     try:
-        # Bins + labels (always 8)
-        bin_edges, labels = make_bins(max_val=max_val, n_groups=n_groups)
-        cmap = red_cmap(len(labels))
-
         full_path = os.path.join(DATA_DIR, gpkg_path)
         if not os.path.exists(full_path):
             print(f"❌ SKIPPED: File not found - {gpkg_path}")
-            print(f"   Looking for: {full_path}")
             return False
 
         print(f"📊 Processing: {gpkg_path}")
@@ -85,27 +147,61 @@ def plot_ranked_points(gpkg_path, value_col, title, out_png, max_val, n_groups=8
             print(f"   Available columns: {list(gdf.columns)}")
             return False
 
-        # Clean + clip and bin
-        vals = pd.to_numeric(gdf[value_col], errors="coerce").clip(lower=0, upper=max_val)
+        # Clean values - only remove NaN
+        vals = pd.to_numeric(gdf[value_col], errors="coerce")
         gdf = gdf.assign(_val=vals).dropna(subset=["_val"]).copy()
         
         if gdf.empty:
             print(f"❌ SKIPPED: No valid data after cleaning in {gpkg_path}")
             return False
+        
+        # For S3 datasets, exclude values that are exactly 0.0000
+        if gpkg_path in S3_DATASETS:
+            initial_count = len(gdf)
+            gdf = gdf[gdf["_val"] > 0.0000].copy()
+            excluded_count = initial_count - len(gdf)
+            print(f"   Excluded {excluded_count} points with values = 0.0000 for S3 dataset")
             
-        gdf["_bin"] = pd.cut(gdf["_val"], bins=bin_edges, labels=labels,
-                             include_lowest=True, right=True)
+            if gdf.empty:
+                print(f"❌ SKIPPED: No data remaining after excluding zero values in {gpkg_path}")
+                return False
+        
+        # Print data statistics
+        data_min, data_max = gdf["_val"].min(), gdf["_val"].max()
+        print(f"   Data range: {data_min:.6f} to {data_max:.6f}")
+        print(f"   Total points for mapping: {len(gdf)}")
+        
+        # Create equal count bins
+        bin_labels, bin_edges, bin_assignments = create_equal_count_bins(
+            gdf["_val"].values, n_groups=n_groups
+        )
+        cmap = red_cmap(len(bin_labels))
+        
+        # Assign bin labels to each point
+        gdf["_bin_index"] = bin_assignments
+        gdf["_bin_label"] = [bin_labels[i] if i < len(bin_labels) else bin_labels[-1] 
+                            for i in bin_assignments]
+        
+        # Verify equal counts and print bin information
+        print(f"   Bin distribution:")
+        for i, label in enumerate(bin_labels):
+            count = (gdf["_bin_index"] == i).sum()
+            actual_min = gdf[gdf["_bin_index"] == i]["_val"].min() if count > 0 else 0
+            actual_max = gdf[gdf["_bin_index"] == i]["_val"].max() if count > 0 else 0
+            print(f"     Bin {i+1:2d}: {label} ({count:4d} points) [actual: {actual_min:.6f}-{actual_max:.6f}]")
 
-        # CRS
+        # CRS handling
         if gdf.crs is None:
             warnings.warn("Input has no CRS. Assuming EPSG:4326")
             gdf = gdf.set_crs(4326)
         gdf_3857 = gdf.to_crs(WEB_MERCATOR)
 
-        # Plot points (group by bin)
+        # Create plot
         fig, ax = plt.subplots(figsize=FIGSIZE)
-        for i, lab in enumerate(labels):
-            sel = gdf_3857[gdf_3857["_bin"] == lab]
+        
+        # Plot points by bin (darkest red = highest values = top 10%)
+        for i, label in enumerate(bin_labels):
+            sel = gdf_3857[gdf_3857["_bin_index"] == i]
             if not sel.empty:
                 ax.scatter(
                     sel.geometry.x, sel.geometry.y,
@@ -113,12 +209,13 @@ def plot_ranked_points(gpkg_path, value_col, title, out_png, max_val, n_groups=8
                     linewidths=0
                 )
 
-        # Basemap
+        # Add grey canvas basemap
         try:
             cx.add_basemap(ax, source=BASEMAP, crs=f"EPSG:{WEB_MERCATOR}")
         except Exception as e:
             warnings.warn(f"Basemap failed to load ({e}).")
 
+        # Styling
         ax.set_title(title, **MAP_TITLE_FONT)
         ax.set_axis_off()
         ax.set_aspect("equal")
@@ -127,22 +224,27 @@ def plot_ranked_points(gpkg_path, value_col, title, out_png, max_val, n_groups=8
             ax.set_xlim(x0 - 50, x1 + 50)
             ax.set_ylim(y0 - 50, y1 + 50)
 
-        # --- ALWAYS show 8 legend entries ---
+        # Add north arrow
+        add_north_arrow(ax)
+
+        # Create legend showing value ranges for each equal-count bin
         handles = [
             Line2D([0], [0], marker='o', linestyle='',
                    markerfacecolor=cmap(i), markeredgecolor=cmap(i),
-                   markersize=6, label=lab)
-            for i, lab in enumerate(labels)
+                   markersize=6, label=label)
+            for i, label in enumerate(bin_labels)
         ]
         
-        # Enhanced legend with basemap feature descriptions
-        legend_title = f"Value rank (8 groups, 0–{max_val})\n\nBasemap features:\n• Yellow triangles: Peaks/High Points\n• Lines: Roads and Highways"
+        # Legend title - emphasize equal count distribution
+        legend_title = f"Equal Count Distribution\n(~{len(gdf)//n_groups} points per group)"
+        if gpkg_path in S3_DATASETS:
+            legend_title += "\n(Excludes 0.0000 values)"
         
         ax.legend(
             handles=handles,
             title=legend_title,
             loc="lower left", bbox_to_anchor=(0.01, 0.01),
-            ncol=2, frameon=True, fontsize=8, title_fontsize=9, markerscale=1.2
+            ncol=2, frameon=True, fontsize=7, title_fontsize=9, markerscale=1.2
         )
 
         plt.tight_layout()
@@ -155,7 +257,6 @@ def plot_ranked_points(gpkg_path, value_col, title, out_png, max_val, n_groups=8
     except Exception as e:
         print(f"❌ ERROR processing {gpkg_path}: {str(e)}")
         return False
-
 
 def validate_files(datasets):
     """
@@ -175,53 +276,45 @@ def validate_files(datasets):
     
     return existing_files, missing_files
 
-
-# ---- Dataset Configuration ----
+# ---- Dataset Configuration ---- 
 DATASETS = [
     {
-        "gpkg_path": "s3_1_primary_combined_all_vehicles.gpkg",
+        "gpkg_path": "combined_weighted_ev_locations.gpkg",
         "value_col": "combined_weight",
-        "title": "Spatial Distribution: Suitable EV Charging - Primary Substation & Cars",
-        "out_png": "C4_s3_1_all_heatmap.png",
-        "max_val": 0.21
+        "title": "S1: Suitable EV Charging Locations Based on All Cars",
+        "out_png": "C4_s1_all_heatmap.png"
+    },
+    {
+        "gpkg_path": "ev_combined_weighted_ev_locations.gpkg",
+        "value_col": "ev_combined_weight", 
+        "title": " S1: Suitable EV Charging Locations Based on EVs Only",
+        "out_png": "C4_s1_ev_heatmap.png"
+    },
+    {
+        "gpkg_path": "s2_household_income_combined_all_vehicles_core.gpkg",
+        "value_col": "s2_all_vehicles_income_combined",
+        "title": "S2: Suitable EV Charging Locations Based on All Cars and Income",
+        "out_png": "C4_s2_all_income_heatmap.png"
+    },
+    {
+        "gpkg_path": "s2_household_income_combined_ev_vehicles_core.gpkg",
+        "value_col": "s2_ev_vehicles_income_combined",
+        "title": "S2: Suitable EV Charging Locations Based on EVs and Income",
+        "out_png": "C4_s2_ev_income_heatmap.png"
+    },
+    {
+        "gpkg_path": "s3_1_primary_combined_all_vehicles.gpkg",
+        "value_col": "s3_1_primary_combined_all_vehicles_weight",
+        "title": "S3: Suitable EV Charging Locations Based on All Cars and Substation Capacity",
+        "out_png": "C4_s3_1_all_heatmap.png"
     },
     {
         "gpkg_path": "s3_1_primary_combined_ev_vehicles.gpkg",
-        "value_col": "ev_combined_weight",
-        "title": "Spatial Distribution: Suitable EV Charging - Primary Substation & EVs",
-        "out_png": "C4_s3_1_ev_heatmap.png",
-        "max_val": 0.20
-    },
-    {
-        "gpkg_path": "s3_2_secondary_combined_all_vehicles.gpkg",  # Fixed: changed from "primary" to "secondary"
-        "value_col": "combined_weight",
-        "title": "Spatial Distribution: Suitable EV Charging - Secondary Substation & Cars",  # Updated title
-        "out_png": "C4_s3_2_all_heatmap.png",
-        "max_val": 0.12
-    },
-    {
-        "gpkg_path": "s3_2_secondary_combined_ev_vehicles.gpkg",  # Fixed: changed from "primary" to "secondary"
-        "value_col": "ev_combined_weight",
-        "title": "Spatial Distribution: Suitable EV Charging - Secondary Substation & EVs",  # Updated title
-        "out_png": "C4_s3_2_ev_heatmap.png",
-        "max_val": 0.07
-    },
-    {
-        "gpkg_path": "s3_3_primary&secondary_combined_all_vehicles.gpkg",
-        "value_col": "combined_weight",
-        "title": "Spatial Distribution: Suitable EV Charging - Combined Substation & Cars",
-        "out_png": "C4_s3_3_all_heatmap.png",
-        "max_val": 0.21
-    },
-    {
-        "gpkg_path": "s3_3_primary&secondary_combined_ev_vehicles.gpkg",
-        "value_col": "ev_combined_weight",
-        "title": "Spatial Distribution: Suitable EV Charging - Combined Substation & EVs",
-        "out_png": "C4_s3_3_ev_heatmap.png",
-        "max_val": 0.20
+        "value_col": "s3_1_primary_combined_ev_vehicles_weight",
+        "title": "S3: Suitable EV Charging Locations Based on EVs and Substation Capacity",
+        "out_png": "C4_s3_1_ev_heatmap.png"
     }
 ]
-
 
 # ---- Main Execution ----
 if __name__ == "__main__":
@@ -251,8 +344,7 @@ if __name__ == "__main__":
                 value_col=dataset["value_col"],
                 title=dataset["title"],
                 out_png=dataset["out_png"],
-                max_val=dataset["max_val"],
-                n_groups=8
+                n_groups=10  # Always 10 equal-count categories
             )
             
             if success:
@@ -262,6 +354,15 @@ if __name__ == "__main__":
         
         print("=" * 60)
         print(f"📊 SUMMARY: {successful} successful, {failed} failed, {len(missing_files)} missing")
+        print(f"🎨 All heatmaps use:")
+        print(f"   • Red color scheme (light→dark = low→high values)")
+        print(f"   • Grey canvas basemap") 
+        print(f"   • Equal count distribution (exactly same number of points per bin)")
+        print(f"   • Value ranges determined by actual data distribution")
+        print(f"   • Top 10% of points = darkest red")
+        print(f"   • Bottom 10% of points = lightest red")
+        print(f"   • S3 datasets exclude points with values = 0.0000")
+        print(f"   • North arrow in upper left corner")
         
     else:
         print("❌ No valid datasets found to process!")
