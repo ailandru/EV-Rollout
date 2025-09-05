@@ -1,5 +1,6 @@
 # Visualisation/C4_Distribution.py
 # Create distribution plots for EV charger location normalised values (no LSOA grouping).
+# Run this file directly: python C4_Distribution.py
 
 from pathlib import Path
 import warnings
@@ -19,7 +20,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---- Dataset Configuration ----
 DATASETS = [
-    # (gpkg filename, value column, output png name, nice title, approx_max)
+    # Existing Scenario 1 & 2 datasets
     ("combined_weighted_ev_locations.gpkg", "combined_weight",
      "C4_s1_all_LSOA_distribution.png", 
      "Scenario 1 (All Car Types): Combined Normalised Distribution", 0.20),
@@ -28,10 +29,18 @@ DATASETS = [
      "Scenario 1 (EV): EV-Combined Normalised Distribution", 0.18),
     ("s2_household_income_combined_all_vehicles_core.gpkg", "s2_all_vehicles_income_combined",
      "C4_s2_all_income_LSOA_distribution.png", 
-     "Scenario 2 (All Car Types × Income): Distribution", 0.32),
+     "Scenario 2 (All Car Types × Income): Distribution", 0.20),
     ("s2_household_income_combined_ev_vehicles_core.gpkg", "s2_ev_vehicles_income_combined",
      "C4_s2_ev_income_LSOA_distribution.png", 
-     "Scenario 2 (EV × Income): Distribution", 0.32),
+     "Scenario 2 (EV × Income): Distribution", 0.18),
+    
+    # NEW Scenario 3 datasets
+    ("s3_1_primary_combined_all_vehicles.gpkg", "s3_1_primary_combined_all_vehicles_weight",
+     "C4_s3_1_all.png",
+     "Scenario 3 (All Car Types x Primary Substation Capacity): Distribution", 0.21),
+    ("s3_1_primary_combined_ev_vehicles.gpkg", "s3_1_primary_combined_ev_vehicles_weight",
+     "C4_s3_1_ev.png",
+     "Scenario 3 (EV x Primary Substation Capacity): Distribution", 0.20),
 ]
 
 def load_dataset_values(points_path: Path, value_col: str) -> pd.Series:
@@ -150,92 +159,114 @@ def create_violin_plot(values: pd.Series, title: str, max_val: float, output_pat
     print(f"Saved violin plot: {output_path}")
 
 def create_comparison_plot(all_data: dict, output_path: Path):
-    """Create comparison plot showing all distributions together."""
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
-    axes = [ax1, ax2, ax3, ax4]
-    
-    colors = ['skyblue', 'lightcoral', 'lightgreen', 'plum']
-    
+    """Create comparison plot showing all distributions together with 2 columns layout."""
+    n_datasets = len(all_data)
+
+    # Always use 2 columns layout for better spacing
+    n_cols = 2
+    n_rows = (n_datasets + 1) // 2  # Round up division
+
+    # Adjust figure size based on number of rows
+    fig_width = 16  # Fixed width for 2 columns
+    fig_height = max(8, n_rows * 4)  # Minimum 8, scale with rows
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_width, fig_height))
+
+    # Handle case where we have only one row
+    if n_rows == 1:
+        axes = axes.reshape(1, -1)
+    # Handle case where we have only one subplot total
+    elif n_datasets == 1:
+        axes = np.array([[axes]])
+
+    axes = axes.flatten()
+
+    # Updated colors array for 6 datasets (removed 4 colors since you removed 4 datasets)
+    colors = ['skyblue', 'lightcoral', 'lightgreen', 'plum', 'orange', 'pink']
+
     for i, (key, (values, title, max_val)) in enumerate(all_data.items()):
+        if i >= len(axes):
+            break
+
         ax = axes[i]
-        
+        color = colors[i % len(colors)]
+
         # Histogram with KDE
-        ax.hist(values, bins=40, density=True, alpha=0.7, 
-                color=colors[i], edgecolor='black', linewidth=0.5)
-        
+        n, bins, patches = ax.hist(
+            values, bins=40, density=True, alpha=0.7,
+            color=color, edgecolor='black', linewidth=0.5,
+            label='Histogram'
+        )
+
         # KDE overlay
         ax2 = ax.twinx()
-        values.plot.kde(ax=ax2, color='red', linewidth=2, alpha=0.8)
+        kde_line = values.plot.kde(ax=ax2, color='red', linewidth=2, alpha=0.8, label='KDE')
         ax2.set_ylabel('')
         ax2.set_yticks([])
-        
+
         # Styling
         ax.set_xlabel('Normalised Value', fontsize=11)
         ax.set_ylabel('Frequency', fontsize=11)
-        ax.set_title(title, fontsize=12, fontweight='bold')
+        ax.set_title(title, fontsize=11, fontweight='bold', wrap=True)
         ax.set_xlim(0, max_val * 1.1)
         ax.grid(True, alpha=0.3)
-        
-        # Add key statistics
+
+        # Move key statistics to RIGHT side to avoid blocking data
         stats = f"n={len(values):,}\nμ={values.mean():.3f}\nσ={values.std():.3f}"
-        ax.text(0.02, 0.98, stats, transform=ax.transAxes, 
-                verticalalignment='top', bbox=dict(boxstyle='round', 
-                facecolor='white', alpha=0.8), fontsize=9)
-    
-    plt.suptitle('EV Charger Location Normalised Distributions - All Scenarios', 
-                 fontsize=16, fontweight='bold', y=0.98)
-    plt.tight_layout()
+        ax.text(
+            0.98, 0.98, stats, transform=ax.transAxes, 
+            verticalalignment='top', horizontalalignment='right',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=9
+        )
+
+        # --- Per-axes legend on the RIGHT side (small legend) ---
+        # Get handles/labels from both axes so we show Histogram + KDE
+        handles1, labels1 = ax.get_legend_handles_labels()
+        handles2, labels2 = ax2.get_legend_handles_labels()
+        handles = handles1 + handles2
+        labels = labels1 + labels2
+
+        # Place the small legend just outside the right edge of each subplot
+        # (upper right, outside) to keep the data area clear.
+        ax.legend(
+            handles, labels, loc='upper left', bbox_to_anchor=(1.02, 1.0),
+            borderaxespad=0., fontsize=9, frameon=True
+        )
+
+    # Hide unused subplots
+    for j in range(len(all_data), len(axes)):
+        axes[j].set_visible(False)
+
+    # --- Main title at the TOP of the PNG ---
+    fig.suptitle(
+        'EV Charger Location Normalised Distributions - All Scenarios',
+        fontsize=16, fontweight='bold', y=0.98
+    )
+
+    # Tight layout, reserving space for suptitle; a bit more right margin
+    # so the per-axes legends (outside) don't get clipped.
+    plt.tight_layout(rect=[0, 0, 0.95, 0.94])
+
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved comparison plot: {output_path}")
 
-def create_cumulative_plot(all_data: dict, output_path: Path):
-    """Create cumulative distribution plot."""
-    fig, ax = plt.subplots(figsize=(12, 8))
-    
-    colors = ['blue', 'red', 'green', 'purple']
-    linestyles = ['-', '--', '-.', ':']
-    
-    for i, (key, (values, title, max_val)) in enumerate(all_data.items()):
-        # Calculate cumulative distribution
-        sorted_vals = np.sort(values)
-        y = np.arange(1, len(sorted_vals) + 1) / len(sorted_vals)
-        
-        ax.plot(sorted_vals, y, color=colors[i], linestyle=linestyles[i], 
-                linewidth=2, label=title.split(':')[0])  # Shorten labels
-        
-        # Mark key percentiles
-        percentiles = [50, 75, 90, 95]
-        for p in percentiles:
-            val = np.percentile(values, p)
-            if i == 0:  # Only label for first dataset to avoid clutter
-                ax.axvline(val, color='gray', alpha=0.3, linestyle='--')
-                ax.text(val, 0.1 + i*0.05, f'{p}th', rotation=90, 
-                       fontsize=8, alpha=0.7)
-    
-    ax.set_xlabel('Normalised Value', fontsize=12)
-    ax.set_ylabel('Cumulative Probability', fontsize=12)
-    ax.set_title('Cumulative Distribution Functions - All Scenarios', 
-                 fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc='lower right')
-    ax.set_ylim(0, 1)
-    
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved cumulative plot: {output_path}")
-
 def main():
     """Process each dataset and create distribution plots."""
-    print("Starting distribution analysis...")
+    print("=" * 80)
+    print("EV CHARGER LOCATION DISTRIBUTION ANALYSIS")
+    print("=" * 80)
+    print(f"Input directory: {OUTW_DIR}")
     print(f"Output directory: {OUT_DIR}")
     
     all_data = {}
     successful_datasets = 0
     
+    # Process all individual datasets
+    print(f"\n📊 PROCESSING INDIVIDUAL DATASETS")
+    print("-" * 40)
     for i, (gpkg, valcol, outname, title, max_val) in enumerate(DATASETS, 1):
-        print(f"\n--- Processing dataset {i}/{len(DATASETS)}: {gpkg} ---")
+        print(f"\n[{i}/{len(DATASETS)}] Processing: {gpkg}")
         
         try:
             points_path = OUTW_DIR / gpkg
@@ -261,7 +292,7 @@ def main():
             successful_datasets += 1
             
         except FileNotFoundError as e:
-            print(f"✗ File not found for {gpkg}: {e}")
+            print(f"✗ File not found: {gpkg}")
             continue
         except KeyError as e:
             print(f"✗ Column error for {gpkg}: {e}")
@@ -272,24 +303,25 @@ def main():
     
     # Create comparison plots if we have data
     if all_data:
-        print(f"\n--- Creating comparison visualizations ---")
+        print(f"\n🎨 CREATING COMPARISON VISUALIZATIONS")
+        print("-" * 40)
         
         # Multi-panel comparison
         comparison_path = OUT_DIR / "C4_all_distributions_comparison.png"
         create_comparison_plot(all_data, comparison_path)
-        
-        # Cumulative distribution comparison
-        cumulative_path = OUT_DIR / "C4_cumulative_distributions.png"
-        create_cumulative_plot(all_data, cumulative_path)
     
-    print(f"\n--- Analysis complete ---")
-    print(f"Successfully processed {successful_datasets}/{len(DATASETS)} datasets")
-    print(f"Check output files in: {OUT_DIR}")
-    print("\nGenerated visualizations:")
-    print("- Individual histograms with KDE overlays")
-    print("- Individual violin plots") 
-    print("- Multi-panel comparison plot")
-    print("- Cumulative distribution comparison")
+    # Final summary
+    print("\n" + "=" * 80)
+    print("ANALYSIS COMPLETE")
+    print("=" * 80)
+    print(f"✓ Successfully processed: {successful_datasets}/{len(DATASETS)} individual datasets")
+    print(f"📁 Output files saved to: {OUT_DIR}")
+    
+    print(f"\n📋 GENERATED VISUALIZATIONS:")
+    print(f"   • {successful_datasets} Individual histograms with KDE overlays")
+    print(f"   • {successful_datasets} Individual violin plots") 
+    if all_data:
+        print(f"   • 1 Multi-panel comparison plot")
 
 if __name__ == "__main__":
     main()
