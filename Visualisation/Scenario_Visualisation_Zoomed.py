@@ -115,8 +115,8 @@ def get_curbridge_extent():
         boundary_3857 = boundary_gdf.to_crs(WEB_MERCATOR)
         
         # Curbridge coordinates (exact coordinates provided)
-        curbridge_lat = 50.882045
-        curbridge_lon = -1.229974
+        curbridge_lat = 50.888770
+        curbridge_lon = -1.231189
 
         
         # Convert lat/lon to Web Mercator using pyproj
